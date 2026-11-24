@@ -1,0 +1,164 @@
+:root,
+[data-theme='dark'] {
+  /* Warm Mineral Carbon & Stone (Zero Neon, Zero Colored Ghost Boxes) */
+  --bg-app: #141413;
+  --bg-topbar: #181816;
+  --bg-surface: #1c1c1a;
+  --bg-subtle: #242421;
+  --bg-well: #111110;
+
+  --border-subtle: #262623;
+  --border-default: #32322e;
+  --border-strong: #474741;
+
+  --ink-primary: #eceae4;
+  --ink-secondary: #9c9991;
+  --ink-muted: #6e6c66;
+
+  --btn-primary-bg: #eceae4;
+  --btn-primary-fg: #141413;
+  --btn-primary-hover: #ffffff;
+
+  --btn-secondary-bg: #242421;
+  --btn-secondary-fg: #e2e0da;
+  --btn-secondary-border: #353530;
+  --btn-secondary-hover: #2e2e2a;
+
+  /* Desaturated Analog Instrument Accents (Leica Brass & Matte Automotive Brick — Never Neon/Amber) */
+  --status-ok-dot: #6d9475;
+  --status-warn: #b59a6a;
+  --status-warn-bg: #22211e;
+  --status-danger: #b83a2c;
+  --status-danger-bg: #221d1c;
+
+  /* Canvas Instrument Ink */
+  --trace-primary: #e8e6df;
+  --trace-secondary: #7d7b74;
+  --trace-limit: #a85644;
+  --trace-shade: rgba(236, 234, 228, 0.07);
+  --trace-grid: rgba(255, 255, 255, 0.045);
+  --trace-label: #8a8880;
+  --qr-fg: #eceae4;
+
+  --scrollbar-thumb: #33332f;
+  --scrollbar-thumb-hover: #474741;
+
+  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+[data-theme='light'] {
+  /* Warm Unbleached Limestone / Braun Studio Palette */
+  --bg-app: #eeece6;
+  --bg-topbar: #f6f5f1;
+  --bg-surface: #faf9f6;
+  --bg-subtle: #efede7;
+  --bg-well: #e8e5dd;
+
+  --border-subtle: #e2dfd7;
+  --border-default: #d3cfc5;
+  --border-strong: #b5b0a4;
+
+  --ink-primary: #181816;
+  --ink-secondary: #595751;
+  --ink-muted: #858279;
+
+  --btn-primary-bg: #181816;
+  --btn-primary-fg: #faf9f6;
+  --btn-primary-hover: #2c2c28;
+
+  --btn-secondary-bg: #f1efe9;
+  --btn-secondary-fg: #1f1f1c;
+  --btn-secondary-border: #cfcbc0;
+  --btn-secondary-hover: #e7e4dc;
+
+  --status-ok-dot: #467853;
+  --status-warn: #8c6d3b;
+  --status-warn-bg: #f0ece3;
+  --status-danger: #a62c1f;
+  --status-danger-bg: #f2eae8;
+
+  --trace-primary: #1d1d1a;
+  --trace-secondary: #78756d;
+  --trace-limit: #9e4332;
+  --trace-shade: rgba(24, 24, 22, 0.06);
+  --trace-grid: rgba(24, 24, 22, 0.065);
+  --trace-label: #6b6860;
+  --qr-fg: #181816;
+
+  --scrollbar-thumb: #c7c3b8;
+  --scrollbar-thumb-hover: #aba69a;
+
+  --shadow-card: 0 1px 2px rgba(20, 20, 18, 0.05);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* Custom Recessed Hardware Scrollbars (Eliminates White OS Scrollbars) */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-app);
+  color: var(--ink-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: -0.008em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

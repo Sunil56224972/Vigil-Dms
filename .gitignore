@@ -1,0 +1,23 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local secrets & runtime databases
+.env
+.env.*
+!.env.example
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Auto-synced MediaPipe binaries (populated via scripts/prepare-assets.mjs)
+public/wasm/
+public/models/*.task
+
+# Local workspace / OS scratch files
+.playwright-mcp/
+Screenshot*.png
+Thumbs.db
+.DS_Store
