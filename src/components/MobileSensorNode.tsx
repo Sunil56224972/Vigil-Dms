@@ -74,12 +74,19 @@ export const MobileSensorNode: React.FC = () => {
     });
     channelRef.current = ch;
 
-    try {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws?role=sensor&label=${nodeIdRef.current}`);
-      localWsRef.current = ws;
-    } catch {
-      // Supabase Realtime WSS remains primary
+    const isLocalHost =
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(window.location.hostname);
+
+    if (isLocalHost) {
+      try {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${proto}//${window.location.host}/ws?role=sensor&label=${nodeIdRef.current}`);
+        localWsRef.current = ws;
+      } catch {
+        // Supabase Realtime WSS remains primary
+      }
     }
 
     const onVisibility = () => {

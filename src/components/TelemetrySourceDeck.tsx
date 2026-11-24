@@ -193,7 +193,7 @@ export const TelemetrySourceDeck: React.FC<TelemetrySourceDeckProps> = ({
                   Pair smartphone as 3-axis IMU &amp; GPS sensor
                 </div>
                 <div style={{ color: 'var(--ink-secondary)', fontSize: 11.5, marginBottom: 9 }}>
-                  Scan or open <span className="mono" style={{ color: 'var(--ink-primary)' }}>{sensorPairUrl}</span> on a phone to stream live accelerometer, yaw rate, and GPS speed over Supabase Realtime (accept local HTTPS prompt once on mobile).
+                  Scan or open <span className="mono" style={{ color: 'var(--ink-primary)' }}>{sensorPairUrl}</span> on a phone to stream live accelerometer, yaw rate, and GPS speed over Supabase Realtime{lanSensorUrl ? ' (accept local HTTPS prompt once on mobile)' : ''}.
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button

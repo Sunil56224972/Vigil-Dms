@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import https from 'node:https';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,37 +23,21 @@ function copyWasmAssets() {
   console.log('[prepare-assets] Synced MediaPipe WASM runtime to public/wasm/');
 }
 
-function downloadModelIfMissing() {
+async function downloadModelIfMissing() {
   fs.mkdirSync(MODEL_DIR, { recursive: true });
   if (fs.existsSync(MODEL_DEST) && fs.statSync(MODEL_DEST).size > 1_000_000) {
     console.log('[prepare-assets] Local face_landmarker.task verified.');
-    return Promise.resolve();
+    return;
   }
 
   console.log('[prepare-assets] Downloading face_landmarker.task...');
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(MODEL_DEST);
-    https
-      .get(MODEL_URL, (res) => {
-        if (res.statusCode !== 200) {
-          file.close();
-          fs.rmSync(MODEL_DEST, { force: true });
-          reject(new Error(`HTTP ${res.statusCode} fetching model`));
-          return;
-        }
-        res.pipe(file);
-        file.on('finish', () => {
-          file.close();
-          console.log('[prepare-assets] Downloaded face_landmarker.task to public/models/');
-          resolve();
-        });
-      })
-      .on('error', (err) => {
-        file.close();
-        fs.rmSync(MODEL_DEST, { force: true });
-        reject(err);
-      });
-  });
+  const res = await fetch(MODEL_URL);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} fetching MediaPipe model`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  fs.writeFileSync(MODEL_DEST, buf);
+  console.log(`[prepare-assets] Saved face_landmarker.task (${buf.length} bytes).`);
 }
 
 copyWasmAssets();

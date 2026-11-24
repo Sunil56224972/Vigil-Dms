@@ -201,14 +201,21 @@ const CockpitStation: React.FC = () => {
       setSupabaseReady(proof.reason !== 'RPC_UNREACHABLE');
     })();
 
-    fetch('/api/system/status')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (mounted && data?.network?.sensorHttpsUrl) {
-          setLanSensorUrl(data.network.sensorHttpsUrl);
-        }
-      })
-      .catch(() => {});
+    const isLocalHost =
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(window.location.hostname);
+
+    if (isLocalHost) {
+      fetch('/api/system/status')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (mounted && data?.network?.sensorHttpsUrl) {
+            setLanSensorUrl(data.network.sensorHttpsUrl);
+          }
+        })
+        .catch(() => {});
+    }
 
     const channel = createRealtimeTelemetryBus({
       onSensorFrame: (frame) => {
@@ -259,21 +266,23 @@ const CockpitStation: React.FC = () => {
     });
 
     let localWs: WebSocket | null = null;
-    try {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      localWs = new WebSocket(`${proto}//${window.location.host}/ws?role=cockpit`);
-      localWs.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(String(ev.data));
-          if (msg.type === 'EXTERNAL_TELEMETRY_FRAME' && msg.frame) {
-            kinematicEngineRef.current.ingestExternalFrame(msg.frame);
+    if (isLocalHost) {
+      try {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        localWs = new WebSocket(`${proto}//${window.location.host}/ws?role=cockpit`);
+        localWs.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(String(ev.data));
+            if (msg.type === 'EXTERNAL_TELEMETRY_FRAME' && msg.frame) {
+              kinematicEngineRef.current.ingestExternalFrame(msg.frame);
+            }
+          } catch {
+            // Ignore malformed WS message
           }
-        } catch {
-          // Ignore malformed WS message
-        }
-      };
-    } catch {
-      // Supabase Realtime remains active
+        };
+      } catch {
+        // Supabase Realtime remains active
+      }
     }
 
     return () => {

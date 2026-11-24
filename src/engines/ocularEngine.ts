@@ -119,31 +119,45 @@ export class OcularBiometricEngine {
     if (this.initializing) return this.initializing;
 
     this.initializing = (async () => {
-      const vision = await FilesetResolver.forVisionTasks('/wasm');
+      const wasmBase = '/wasm';
+      const localModel = '/models/face_landmarker.task';
+      const cdnModel =
+        'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+      let vision;
       try {
-        this.landmarker = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: '/models/face_landmarker.task',
-            delegate: 'GPU',
-          },
-          runningMode: 'VIDEO',
-          numFaces: 1,
-          outputFaceBlendshapes: true,
-          outputFacialTransformationMatrixes: true,
-        });
+        vision = await FilesetResolver.forVisionTasks(wasmBase);
       } catch {
-        this.landmarker = await FaceLandmarker.createFromOptions(vision, {
+        vision = await FilesetResolver.forVisionTasks(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm'
+        );
+      }
+
+      const tryCreate = async (modelPath: string, delegate: 'GPU' | 'CPU') =>
+        FaceLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath: '/models/face_landmarker.task',
-            delegate: 'CPU',
+            modelAssetPath: modelPath,
+            delegate,
           },
           runningMode: 'VIDEO',
           numFaces: 1,
           outputFaceBlendshapes: true,
           outputFacialTransformationMatrixes: true,
         });
+
+      try {
+        this.landmarker = await tryCreate(localModel, 'GPU');
+      } catch {
+        try {
+          this.landmarker = await tryCreate(localModel, 'CPU');
+        } catch {
+          this.landmarker = await tryCreate(cdnModel, 'GPU');
+        }
       }
-    })();
+    })().catch((err) => {
+      this.initializing = null;
+      throw err;
+    });
 
     return this.initializing;
   }
