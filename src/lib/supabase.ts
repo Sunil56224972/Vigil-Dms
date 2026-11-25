@@ -383,21 +383,36 @@ export async function analyzeTelemetryLogCloud(params: {
   return (await res.json()) as AnalyzedTelemetryReport;
 }
 
+let activeBusChannel: RealtimeChannel | null = null;
+
 export async function broadcastEmergencySos(payload: {
+  requestId?: string;
+  fromCloudClient?: boolean;
+  driverTag?: string;
   dialNumber: string;
   reason: string;
   speedKmh: number;
   lat: number | null;
   lon: number | null;
+  frameEvidence?: string | null;
 }): Promise<void> {
   try {
-    const ch = supabase.channel('dms9-telemetry-bus');
+    const body = { ...payload, timestampMs: Date.now() };
+    if (activeBusChannel) {
+      await activeBusChannel.send({
+        type: 'broadcast',
+        event: 'emergency_sos',
+        payload: body,
+      });
+      return;
+    }
+    const ch = supabase.channel('dms9-telemetry-bus-oneshot');
     ch.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await ch.send({
           type: 'broadcast',
           event: 'emergency_sos',
-          payload: { ...payload, timestampMs: Date.now() },
+          payload: body,
         });
         setTimeout(() => {
           supabase.removeChannel(ch).catch(() => {});
@@ -409,10 +424,23 @@ export async function broadcastEmergencySos(payload: {
   }
 }
 
+export function pingCloudWhatsAppBridge(): void {
+  if (!activeBusChannel) return;
+  activeBusChannel
+    .send({
+      type: 'broadcast',
+      event: 'whatsapp_status_ping',
+      payload: { t: Date.now() },
+    })
+    .catch(() => {});
+}
+
 export function createRealtimeTelemetryBus(handlers: {
   onSensorFrame?: (frame: Record<string, unknown>) => void;
   onIncidentInsert?: (incident: IncidentRecord) => void;
   onSessionChange?: (session: SessionRecord) => void;
+  onWhatsAppBridgeStatus?: (status: { state: string; connectedUser: string | null }) => void;
+  onEmergencySosAck?: (ack: { requestId?: string; ok: boolean; message: string }) => void;
 }): RealtimeChannel {
   const channel = supabase
     .channel('dms9-telemetry-bus', {
@@ -421,6 +449,20 @@ export function createRealtimeTelemetryBus(handlers: {
     .on('broadcast', { event: 'sensor_frame' }, (msg) => {
       if (msg.payload && handlers.onSensorFrame) {
         handlers.onSensorFrame(msg.payload as Record<string, unknown>);
+      }
+    })
+    .on('broadcast', { event: 'whatsapp_status_pong' }, (msg) => {
+      if (msg.payload && handlers.onWhatsAppBridgeStatus) {
+        handlers.onWhatsAppBridgeStatus(
+          msg.payload as { state: string; connectedUser: string | null }
+        );
+      }
+    })
+    .on('broadcast', { event: 'emergency_sos_ack' }, (msg) => {
+      if (msg.payload && handlers.onEmergencySosAck) {
+        handlers.onEmergencySosAck(
+          msg.payload as { requestId?: string; ok: boolean; message: string }
+        );
       }
     })
     .on(
@@ -441,7 +483,13 @@ export function createRealtimeTelemetryBus(handlers: {
         }
       }
     )
-    .subscribe();
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        activeBusChannel = channel;
+        pingCloudWhatsAppBridge();
+      }
+    });
 
+  activeBusChannel = channel;
   return channel;
 }

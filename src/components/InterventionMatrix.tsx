@@ -32,6 +32,7 @@ export function formatDialNumber(raw: string): { cleanDigits: string; telHref: s
 interface InterventionMatrixProps {
   intervention: ActiveInterventionState;
   emergencyCall: EmergencyCallState | null;
+  cloudWaRelay?: { connected: boolean; user: string | null };
   thresholds: ThresholdsConfig;
   recentIncidents: IncidentRecord[];
   onUpdateThresholds: (partial: Partial<ThresholdsConfig>) => void;
@@ -47,6 +48,7 @@ interface InterventionMatrixProps {
 export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
   intervention,
   emergencyCall,
+  cloudWaRelay,
   thresholds,
   recentIncidents,
   onUpdateThresholds,
@@ -203,6 +205,7 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
 
   const hasCloudGateway = Boolean(
     waBridge.state === 'CONNECTED' ||
+      cloudWaRelay?.connected ||
       twilioCfg.callmebotKey.trim() ||
       twilioCfg.fast2smsKey.trim() ||
       (twilioCfg.sid.trim() && twilioCfg.token.trim() && twilioCfg.from.trim())
@@ -624,9 +627,13 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
                         </>
                       )}
                     </div>
+                  ) : cloudWaRelay?.connected ? (
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--ink-primary)' }}>
+                      Connected (+{cloudWaRelay.user || '917389416622'}) via Live Cloud Relay — Auto-sends WhatsApp + GPS
+                    </div>
                   ) : (
                     <div style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
-                      Run local server (<span className="mono">npm start</span> on localhost:4400) to use the built-in QR WhatsApp Auto-Sender, or use Step 1 / Step 3 on cloud.
+                      Run local server (<span className="mono">npm start</span> on localhost:4400) to activate Live WhatsApp Relay, or use Step 1 / Step 3 on cloud.
                     </div>
                   )}
                 </div>

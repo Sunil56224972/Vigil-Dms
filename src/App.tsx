@@ -112,6 +112,10 @@ const CockpitStation: React.FC = () => {
     triggeredAtMs: null,
   });
   const [emergencyCall, setEmergencyCall] = useState<EmergencyCallState | null>(null);
+  const [cloudWaRelay, setCloudWaRelay] = useState<{ connected: boolean; user: string | null }>({
+    connected: false,
+    user: null,
+  });
 
   const [driverTag, setDriverTag] = useState('Driver-01');
   const [activeSession, setActiveSession] = useState<SessionRecord | null>(null);
@@ -260,12 +264,24 @@ const CockpitStation: React.FC = () => {
           th.voiceArmed
         );
 
+        const snap = await captureOpticalEvidenceAsync();
+        const isLocalOrigin =
+          typeof window !== 'undefined' &&
+          (window.location.hostname === 'localhost' ||
+            window.location.hostname === '127.0.0.1' ||
+            /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(window.location.hostname));
+        const reqId = `SOS-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+
         broadcastEmergencySos({
+          requestId: reqId,
+          fromCloudClient: !isLocalOrigin,
+          driverTag,
           dialNumber: dial.display,
           reason,
           speedKmh: kin.speedKmh,
           lat,
           lon,
+          frameEvidence: snap,
         });
 
         let gatewayCfg = {
@@ -298,7 +314,7 @@ const CockpitStation: React.FC = () => {
             (gatewayCfg.sid.trim() && gatewayCfg.token.trim() && gatewayCfg.from.trim())
         );
 
-        // If no background SMS/WhatsApp API key is configured yet, auto-launch native SMS (mobile) or WhatsApp Desktop/Web with pre-filled SOS + GPS
+        // If no background SMS/WhatsApp API or live relay is connected, auto-launch native SMS (mobile) or WhatsApp Web
         if (!hasSilentApi && gatewayCfg.autoOpenApp && typeof window !== 'undefined') {
           const mapsPart =
             lat != null && lon != null
@@ -319,14 +335,12 @@ const CockpitStation: React.FC = () => {
                 a.remove();
               }
             } else {
-              // Launch installed WhatsApp Desktop app (or WhatsApp Web fallback tab) pre-addressed to +917389416622
               const waDigits = dial.display.replace(/\D/g, '');
               window.open(`https://wa.me/${waDigits}?text=${msgBody}`, '_blank', 'noopener,noreferrer');
             }
           } catch {}
         }
 
-        const snap = await captureOpticalEvidenceAsync();
         let addedCloudIncident = false;
         logSafetyIncident({
           sessionId: activeSessionRef.current?.id ?? null,
@@ -378,16 +392,19 @@ const CockpitStation: React.FC = () => {
           .then((r) => r.json().catch(() => null))
           .then((data) => {
             if (data) {
-              setEmergencyCall((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      pstnStatus: data.status || (data.pstnDispatched ? 'RINGING' : 'NO_GATEWAY'),
-                      pstnMessage: data.message,
-                      callSid: data.callSid,
-                    }
-                  : prev
-              );
+              setEmergencyCall((prev) => {
+                if (!prev) return prev;
+                // Keep live WhatsApp Relay RINGING confirmation if it arrived before serverless NO_GATEWAY
+                if (prev.pstnStatus === 'RINGING' && data.status === 'NO_GATEWAY') {
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  pstnStatus: data.status || (data.pstnDispatched ? 'RINGING' : 'NO_GATEWAY'),
+                  pstnMessage: data.message,
+                  callSid: data.callSid,
+                };
+              });
               if (data.incident && !addedCloudIncident) {
                 setIncidents((prev) =>
                   prev.some((x) => x.id === data.incident.id) ? prev : [data.incident, ...prev]
@@ -513,6 +530,24 @@ const CockpitStation: React.FC = () => {
         });
         if (activeSessionRef.current?.id === sess.id) {
           setActiveSession(sess);
+        }
+      },
+      onWhatsAppBridgeStatus: (st) => {
+        const isConn = st.state === 'CONNECTED';
+        waConnectedRef.current = isConn;
+        setCloudWaRelay({ connected: isConn, user: st.connectedUser || null });
+      },
+      onEmergencySosAck: (ack) => {
+        if (ack?.ok) {
+          setEmergencyCall((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  pstnStatus: 'RINGING',
+                  pstnMessage: ack.message,
+                }
+              : prev
+          );
         }
       },
     });
@@ -1034,6 +1069,7 @@ const CockpitStation: React.FC = () => {
             <InterventionMatrix
               intervention={intervention}
               emergencyCall={emergencyCall}
+              cloudWaRelay={cloudWaRelay}
               thresholds={thresholds}
               recentIncidents={incidents}
               onUpdateThresholds={handleUpdateThresholds}
