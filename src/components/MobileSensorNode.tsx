@@ -345,9 +345,18 @@ export const MobileSensorNode: React.FC = () => {
               </div>
             </div>
 
-            <a href="/" className="hw-btn" style={{ textDecoration: 'none', marginTop: 4 }}>
-              Back to main monitor
-            </a>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
+              <a
+                href="tel:+917389416622"
+                className="hw-btn danger"
+                style={{ textDecoration: 'none', fontWeight: 600 }}
+              >
+                Emergency Call (7389416622)
+              </a>
+              <a href="/" className="hw-btn" style={{ textDecoration: 'none' }}>
+                Back to main monitor
+              </a>
+            </div>
           </div>
         </div>
       </div>

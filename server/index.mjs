@@ -252,6 +252,61 @@ async function bootstrap() {
     res.json(verifyLedgerIntegrity());
   });
 
+  app.post('/api/emergency/call', async (req, res) => {
+    const body = req.body || {};
+    const thresholds = getThresholds();
+    const rawPhone = String(body.phone || thresholds.emergencyPhone || '7389416622').trim();
+    const digits = rawPhone.replace(/\D/g, '') || '7389416622';
+    const dialNumber = rawPhone.startsWith('+')
+      ? `+${digits}`
+      : digits.length === 10
+      ? `+91${digits}`
+      : `+${digits}`;
+
+    const saved = recordIncident({
+      sessionId: body.sessionId ?? null,
+      timestampIso: new Date().toISOString(),
+      category: 'EMERGENCY_SOS',
+      severity: 'CRITICAL',
+      stage: 3,
+      summary: `Emergency SOS call dispatched to ${dialNumber} (${body.reason || 'Driver emergency'})`,
+      interventionAction: 'EMERGENCY_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS',
+      metrics: {
+        dialNumber,
+        reason: body.reason || 'Driver emergency',
+        autoTriggered: Boolean(body.autoTriggered),
+        speedKmh: body.speedKmh ?? 0,
+        lat: body.lat ?? null,
+        lon: body.lon ?? null,
+      },
+      frameEvidence: body.frameEvidence || null,
+    });
+
+    let webhookResult = null;
+    if (thresholds.webhookUrl) {
+      webhookResult = await dispatchSafetyWebhook(thresholds.webhookUrl, {
+        event: 'DMS9_EMERGENCY_SOS_CALL',
+        dialNumber,
+        incident: saved,
+      });
+    }
+
+    broadcastToCockpits({
+      type: 'EMERGENCY_CALL_DISPATCHED',
+      dialNumber,
+      incident: saved,
+      webhookResult,
+    });
+
+    res.json({
+      ok: true,
+      dialNumber,
+      telUri: `tel:${dialNumber}`,
+      incident: saved,
+      webhookResult,
+    });
+  });
+
   app.delete('/api/ledger/reset', (_req, res) => {
     const verification = clearAllLedgerData();
     broadcastToCockpits({ type: 'LEDGER_CLEARED', verification });

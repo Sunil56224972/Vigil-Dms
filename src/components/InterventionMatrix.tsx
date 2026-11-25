@@ -1,38 +1,89 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import anime from 'animejs';
 import { VEHICLE_PROFILE_PRESETS } from '../lib/supabase';
 import { formatCategoryLabel, formatInterventionLabel } from '../lib/formatters';
 import { OdometerValue } from './OdometerValue';
 import type {
   ActiveInterventionState,
+  EmergencyCallState,
   IncidentRecord,
   ThresholdsConfig,
   VehicleProfileKey,
 } from '../types/telemetry';
 
+export function formatDialNumber(raw: string): { cleanDigits: string; telHref: string; waHref: string; display: string } {
+  const trimmed = (raw || '7389416622').trim();
+  const digitsOnly = trimmed.replace(/\D/g, '') || '7389416622';
+  const withCountry =
+    trimmed.startsWith('+')
+      ? `+${digitsOnly}`
+      : digitsOnly.length === 10
+      ? `+91${digitsOnly}`
+      : `+${digitsOnly}`;
+  const waDigits = withCountry.replace(/\D/g, '');
+  return {
+    cleanDigits: digitsOnly,
+    telHref: `tel:${withCountry}`,
+    waHref: `https://wa.me/${waDigits}`,
+    display: withCountry,
+  };
+}
+
 interface InterventionMatrixProps {
   intervention: ActiveInterventionState;
+  emergencyCall: EmergencyCallState | null;
   thresholds: ThresholdsConfig;
   recentIncidents: IncidentRecord[];
   onUpdateThresholds: (partial: Partial<ThresholdsConfig>) => void;
   onSelectPreset: (profile: VehicleProfileKey) => void;
   onManualResetLockout: () => void;
   onTestAudioVoice: () => void;
+  onTriggerEmergencyCall: (reason: string) => void;
+  onCancelAutoSos: () => void;
+  onDismissEmergencyCall: () => void;
   onSelectIncidentForensics: (inc: IncidentRecord) => void;
 }
 
 export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
   intervention,
+  emergencyCall,
   thresholds,
   recentIncidents,
   onUpdateThresholds,
   onSelectPreset,
   onManualResetLockout,
   onTestAudioVoice,
+  onTriggerEmergencyCall,
+  onCancelAutoSos,
+  onDismissEmergencyCall,
   onSelectIncidentForensics,
 }) => {
   const streamListRef = useRef<HTMLDivElement | null>(null);
   const prevTopIdRef = useRef<string | null>(recentIncidents[0]?.id ?? null);
+  const [callElapsedSec, setCallElapsedSec] = useState(0);
+
+  useEffect(() => {
+    if (!emergencyCall?.active) {
+      setCallElapsedSec(0);
+      return;
+    }
+    const tick = () =>
+      setCallElapsedSec(Math.max(0, Math.floor((Date.now() - emergencyCall.startedAtMs) / 1000)));
+    tick();
+    const id = window.setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [emergencyCall?.active, emergencyCall?.startedAtMs]);
+
+  const dialInfo = formatDialNumber(thresholds.emergencyPhone || '7389416622');
+  const mapsLink =
+    emergencyCall?.lat != null && emergencyCall?.lon != null
+      ? `https://maps.google.com/?q=${emergencyCall.lat.toFixed(5)},${emergencyCall.lon.toFixed(5)}`
+      : null;
+  const sosBodyText = encodeURIComponent(
+    `[Vigil DMS Emergency SOS] ${emergencyCall?.reason || 'Driver emergency alert'} · Speed ${
+      emergencyCall ? emergencyCall.speedKmh.toFixed(0) : '0'
+    } km/h${mapsLink ? ` · Location: ${mapsLink}` : ''}`
+  );
 
   useEffect(() => {
     const topId = recentIncidents[0]?.id ?? null;
@@ -272,6 +323,165 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
                 }
               />
             </div>
+          </div>
+
+          {/* Emergency SOS Auto-Dial & 1-Tap Call Module */}
+          <div
+            style={{
+              paddingTop: 8,
+              marginTop: 2,
+              borderTop: '1px solid var(--border-subtle)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 7,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Emergency SOS Call</div>
+                <div style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
+                  Auto-dials on 5s unrecovered microsleep
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>Auto-SOS</span>
+                <button
+                  type="button"
+                  aria-label="Toggle Emergency Auto-SOS"
+                  className={`rocker-switch ${(thresholds.emergencyAutoCall ?? true) ? 'armed' : ''}`}
+                  onClick={() =>
+                    onUpdateThresholds({ emergencyAutoCall: !(thresholds.emergencyAutoCall ?? true) })
+                  }
+                >
+                  <span className="rocker-thumb" />
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 6 }}>
+              <input
+                type="tel"
+                className="hw-input mono"
+                style={{ width: '100%' }}
+                placeholder="7389416622"
+                aria-label="Emergency phone number"
+                value={thresholds.emergencyPhone ?? '7389416622'}
+                onChange={(e) => onUpdateThresholds({ emergencyPhone: e.target.value })}
+              />
+              <a
+                href={dialInfo.telHref}
+                className="hw-btn danger"
+                style={{ textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}
+                onClick={() => onTriggerEmergencyCall('Manual emergency SOS call')}
+              >
+                Call {dialInfo.cleanDigits.slice(-10)}
+              </a>
+            </div>
+
+            {intervention.sosCountdownSec != null && !emergencyCall?.active && (
+              <div
+                style={{
+                  padding: '8px 10px',
+                  background: 'var(--bg-subtle)',
+                  border: '1px solid var(--border-strong)',
+                  boxShadow: 'inset 3px 0 0 var(--status-danger)',
+                  borderRadius: 4,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <span className="mono" style={{ fontSize: 11, color: 'var(--ink-primary)' }}>
+                  Auto-calling {dialInfo.display} in {intervention.sosCountdownSec}s…
+                </span>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  <a
+                    href={dialInfo.telHref}
+                    className="hw-btn danger"
+                    style={{ height: 23, padding: '0 8px', fontSize: 10.5, textDecoration: 'none' }}
+                    onClick={() => onTriggerEmergencyCall('Immediate SOS override')}
+                  >
+                    Call now
+                  </a>
+                  <button
+                    type="button"
+                    className="hw-btn"
+                    style={{ height: 23, padding: '0 8px', fontSize: 10.5 }}
+                    onClick={onCancelAutoSos}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {emergencyCall?.active && (
+              <div
+                style={{
+                  padding: '9px 10px',
+                  background: 'var(--bg-subtle)',
+                  border: '1px solid var(--border-strong)',
+                  boxShadow: 'inset 3px 0 0 var(--status-danger)',
+                  borderRadius: 4,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span className="hw-led crit" />
+                    <span className="mono" style={{ fontSize: 11.5, fontWeight: 600 }}>
+                      Calling {emergencyCall.phoneDial}
+                    </span>
+                  </div>
+                  <span className="mono" style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
+                    {String(Math.floor(callElapsedSec / 60)).padStart(2, '0')}:
+                    {String(callElapsedSec % 60).padStart(2, '0')}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--ink-secondary)' }}>
+                  {emergencyCall.reason} · Speed {emergencyCall.speedKmh.toFixed(0)} km/h
+                  {emergencyCall.lat != null && emergencyCall.lon != null
+                    ? ` · GPS ${emergencyCall.lat.toFixed(4)}, ${emergencyCall.lon.toFixed(4)}`
+                    : ''}
+                </div>
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                  <a
+                    href={dialInfo.telHref}
+                    className="hw-btn danger"
+                    style={{ height: 24, padding: '0 8px', fontSize: 10.5, textDecoration: 'none' }}
+                  >
+                    Redial
+                  </a>
+                  <a
+                    href={`sms:${dialInfo.display}?body=${sosBodyText}`}
+                    className="hw-btn"
+                    style={{ height: 24, padding: '0 8px', fontSize: 10.5, textDecoration: 'none' }}
+                  >
+                    SMS GPS
+                  </a>
+                  <a
+                    href={`${dialInfo.waHref}?text=${sosBodyText}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hw-btn"
+                    style={{ height: 24, padding: '0 8px', fontSize: 10.5, textDecoration: 'none' }}
+                  >
+                    WhatsApp SOS
+                  </a>
+                  <button
+                    type="button"
+                    className="hw-btn"
+                    style={{ height: 24, padding: '0 8px', fontSize: 10.5, marginLeft: 'auto' }}
+                    onClick={onDismissEmergencyCall}
+                  >
+                    End
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </section>

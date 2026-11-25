@@ -84,6 +84,9 @@ export const DEFAULT_THRESHOLDS = {
   voiceArmed: true,
   governorArmed: true,
   governorCapKmh: 40,
+  nightVisionMode: 'AUTO',
+  emergencyPhone: '7389416622',
+  emergencyAutoCall: true,
   webhookUrl: '',
 };
 
@@ -157,7 +160,14 @@ export function getThresholds() {
     return { ...DEFAULT_THRESHOLDS };
   }
   try {
-    return { ...DEFAULT_THRESHOLDS, ...JSON.parse(row.value) };
+    const raw = JSON.parse(row.value);
+    return {
+      ...DEFAULT_THRESHOLDS,
+      ...raw,
+      emergencyPhone: String(raw.emergencyPhone ?? '').trim() || DEFAULT_THRESHOLDS.emergencyPhone,
+      nightVisionMode: raw.nightVisionMode ?? DEFAULT_THRESHOLDS.nightVisionMode,
+      emergencyAutoCall: raw.emergencyAutoCall ?? DEFAULT_THRESHOLDS.emergencyAutoCall,
+    };
   } catch {
     return { ...DEFAULT_THRESHOLDS };
   }

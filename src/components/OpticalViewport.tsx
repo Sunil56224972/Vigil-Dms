@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import anime from 'animejs';
 import { OdometerValue } from './OdometerValue';
 import type {
+  NightVisionMode,
   OcularLandmarksOverlay,
   OcularMetrics,
   ThresholdsConfig,
@@ -10,6 +11,7 @@ import type {
 interface OpticalViewportProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   hudCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  getEnhancedCanvas: () => HTMLCanvasElement | null;
   metrics: OcularMetrics;
   overlayRef: React.MutableRefObject<OcularLandmarksOverlay | null>;
   thresholds: ThresholdsConfig;
@@ -19,6 +21,7 @@ interface OpticalViewportProps {
   onStopOptical: () => void;
   onUploadVideoFile: (file: File) => void;
   onCalibrateNeutral: () => void;
+  onChangeNightVisionMode: (mode: NightVisionMode) => void;
 }
 
 const STATE_LABELS: Record<OcularMetrics['attentionState'], string> = {
@@ -36,6 +39,7 @@ const STATE_LABELS: Record<OcularMetrics['attentionState'], string> = {
 export const OpticalViewport: React.FC<OpticalViewportProps> = ({
   videoRef,
   hudCanvasRef,
+  getEnhancedCanvas,
   metrics,
   overlayRef,
   thresholds,
@@ -45,6 +49,7 @@ export const OpticalViewport: React.FC<OpticalViewportProps> = ({
   onStopOptical,
   onUploadVideoFile,
   onCalibrateNeutral,
+  onChangeNightVisionMode,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const shutterTopRef = useRef<HTMLDivElement | null>(null);
@@ -108,6 +113,31 @@ export const OpticalViewport: React.FC<OpticalViewportProps> = ({
           ctx.clearRect(0, 0, W, H);
 
           const isMirrored = m.sourceMode === 'LIVE_WEBCAM';
+
+          // Render real-time Adaptive Night-Vision / Low-Light enhanced buffer when active
+          const enhCanvas = m.active && m.nightVisionActive ? getEnhancedCanvas() : null;
+          if (enhCanvas && enhCanvas.width > 0 && enhCanvas.height > 0) {
+            const vidAspect = enhCanvas.width / enhCanvas.height;
+            const boxAspect = W / H;
+            let drawW = W;
+            let drawH = H;
+            let offsetX = 0;
+            let offsetY = 0;
+            if (vidAspect > boxAspect) {
+              drawW = H * vidAspect;
+              offsetX = (W - drawW) * 0.5;
+            } else {
+              drawH = W / vidAspect;
+              offsetY = (H - drawH) * 0.5;
+            }
+            ctx.save();
+            if (isMirrored) {
+              ctx.translate(W, 0);
+              ctx.scale(-1, 1);
+            }
+            ctx.drawImage(enhCanvas, offsetX, offsetY, drawW, drawH);
+            ctx.restore();
+          }
           const mapX = (nx: number) => {
             if (!video || video.videoWidth === 0) return nx * W;
             const vidAspect = video.videoWidth / video.videoHeight;
@@ -312,8 +342,8 @@ export const OpticalViewport: React.FC<OpticalViewportProps> = ({
           }
 
           if (m.active) {
-            ctx.fillStyle = 'rgba(16, 16, 15, 0.72)';
-            ctx.fillRect(12, H - 28, 226, 19);
+            ctx.fillStyle = 'rgba(16, 16, 15, 0.76)';
+            ctx.fillRect(12, H - 28, 224, 19);
             ctx.font = '10px "IBM Plex Mono", monospace';
             ctx.fillStyle = '#d4d1c9';
             ctx.fillText(
@@ -321,6 +351,19 @@ export const OpticalViewport: React.FC<OpticalViewportProps> = ({
               18,
               H - 15
             );
+
+            if (m.nightVisionActive) {
+              const irLabel = `Night IR +${m.nightGainDb.toFixed(1)}dB · Luma ${m.ambientLuma}`;
+              ctx.font = '10px "IBM Plex Mono", monospace';
+              const tw = ctx.measureText(irLabel).width + 14;
+              ctx.fillStyle = 'rgba(16, 16, 15, 0.82)';
+              ctx.fillRect(W - tw - 12, H - 28, tw, 19);
+              ctx.strokeStyle = 'rgba(236, 234, 228, 0.35)';
+              ctx.lineWidth = 1;
+              ctx.strokeRect(W - tw - 12, H - 28, tw, 19);
+              ctx.fillStyle = '#eceae4';
+              ctx.fillText(irLabel, W - tw - 5, H - 15);
+            }
           }
 
           ctx.restore();
@@ -343,22 +386,39 @@ export const OpticalViewport: React.FC<OpticalViewportProps> = ({
       <div className="inst-bay-header">
         <div>
           <div className="inst-bay-title">Cabin Vision</div>
-          <div className="inst-bay-subtitle">478-point facial mesh, eyelid EAR &amp; gaze cone</div>
+          <div className="inst-bay-subtitle">478-point mesh, Night-IR gain &amp; gaze cone</div>
         </div>
-        <span
-          style={{
-            fontSize: 11.5,
-            fontWeight: 500,
-            color:
-              metrics.attentionState === 'MICROSLEEP'
-                ? 'var(--status-danger)'
-                : metrics.attentionState !== 'NOMINAL' && metrics.attentionState !== 'STANDBY'
-                ? 'var(--status-warn)'
-                : 'var(--ink-secondary)',
-          }}
-        >
-          {STATE_LABELS[metrics.attentionState]}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            type="button"
+            className={`hw-btn ${(thresholds.nightVisionMode ?? 'AUTO') === 'ON' || metrics.nightVisionActive ? 'selected' : ''}`}
+            style={{ height: 24, padding: '0 8px', fontSize: 11 }}
+            title="Cycle low-light Night-IR enhancement (Auto / On / Off)"
+            onClick={() => {
+              const cur = thresholds.nightVisionMode ?? 'AUTO';
+              const next: NightVisionMode =
+                cur === 'AUTO' ? 'ON' : cur === 'ON' ? 'OFF' : 'AUTO';
+              onChangeNightVisionMode(next);
+            }}
+          >
+            Night IR: {thresholds.nightVisionMode === 'ON' ? 'On' : thresholds.nightVisionMode === 'OFF' ? 'Off' : 'Auto'}
+            {metrics.active && metrics.nightVisionActive ? ` (+${metrics.nightGainDb.toFixed(1)}dB)` : ''}
+          </button>
+          <span
+            style={{
+              fontSize: 11.5,
+              fontWeight: 500,
+              color:
+                metrics.attentionState === 'MICROSLEEP'
+                  ? 'var(--status-danger)'
+                  : metrics.attentionState !== 'NOMINAL' && metrics.attentionState !== 'STANDBY'
+                  ? 'var(--status-warn)'
+                  : 'var(--ink-secondary)',
+            }}
+          >
+            {STATE_LABELS[metrics.attentionState]}
+          </span>
+        </div>
       </div>
 
       <div className="inst-bay-body">

@@ -14,7 +14,10 @@ export type IncidentCategory =
   | 'HARSH_BRAKING'
   | 'RAPID_ACCELERATION'
   | 'SPEEDING'
-  | 'RASH_DRIVING';
+  | 'RASH_DRIVING'
+  | 'EMERGENCY_SOS';
+
+export type NightVisionMode = 'AUTO' | 'ON' | 'OFF';
 
 export type IncidentSeverity = 'ADVISORY' | 'WARNING' | 'CRITICAL';
 export type AlertStage = 0 | 1 | 2 | 3;
@@ -51,6 +54,9 @@ export interface ThresholdsConfig {
   voiceArmed: boolean;
   governorArmed: boolean;
   governorCapKmh: number;
+  nightVisionMode: NightVisionMode;
+  emergencyPhone: string;
+  emergencyAutoCall: boolean;
   webhookUrl: string;
 }
 
@@ -89,6 +95,9 @@ export interface OcularMetrics {
   faceMissingMs: number;
   calibrated: boolean;
   calibratingProgress: number | null;
+  nightVisionActive: boolean;
+  ambientLuma: number;
+  nightGainDb: number;
   fatigueIndex: number;
   attentionState:
     | 'STANDBY'
@@ -156,7 +165,20 @@ export interface ActiveInterventionState {
   wakeFlashActive: boolean;
   lockoutRequiresCheck: boolean;
   alertnessHoldProgress: number;
+  sosCountdownSec: number | null;
   triggeredAtMs: number | null;
+}
+
+export interface EmergencyCallState {
+  active: boolean;
+  phoneRaw: string;
+  phoneDial: string;
+  reason: string;
+  startedAtMs: number;
+  autoTriggered: boolean;
+  lat: number | null;
+  lon: number | null;
+  speedKmh: number;
 }
 
 export interface SessionRecord {

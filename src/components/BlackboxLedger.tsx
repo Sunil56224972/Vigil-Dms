@@ -424,6 +424,25 @@ export const BlackboxLedger: React.FC<BlackboxLedgerProps> = ({
 
             <div>
               <label style={{ fontSize: 11.5, color: 'var(--ink-secondary)', display: 'block', marginBottom: 4 }}>
+                Emergency SOS phone number (tel: auto-dial &amp; SMS)
+              </label>
+              <input
+                type="tel"
+                placeholder="7389416622"
+                className="hw-input mono"
+                style={{ width: '100%' }}
+                value={draftThresholds.emergencyPhone ?? '7389416622'}
+                onChange={(e) =>
+                  setDraftThresholds((prev) => ({
+                    ...prev,
+                    emergencyPhone: e.target.value,
+                  }))
+                }
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: 11.5, color: 'var(--ink-secondary)', display: 'block', marginBottom: 4 }}>
                 Safety webhook URL (optional HTTP POST)
               </label>
               <input

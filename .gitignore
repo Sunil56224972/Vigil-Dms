@@ -18,6 +18,12 @@ public/models/*.task
 
 # Local workspace / OS scratch files
 .playwright-mcp/
+sih ppt formate/
+ideathon project vigil-Dms/
 Screenshot*.png
+logo.jpg
+*.pptx
+*.mp4
+*.webm
 Thumbs.db
 .DS_Store

@@ -51,6 +51,9 @@ export const DEFAULT_THRESHOLDS_CLIENT: ThresholdsConfig = {
   voiceArmed: true,
   governorArmed: true,
   governorCapKmh: 40,
+  nightVisionMode: 'AUTO',
+  emergencyPhone: '7389416622',
+  emergencyAutoCall: true,
   webhookUrl: '',
 };
 
@@ -120,7 +123,14 @@ export async function fetchThresholdsConfig(): Promise<ThresholdsConfig> {
   if (error || !data?.value) {
     return { ...DEFAULT_THRESHOLDS_CLIENT };
   }
-  return { ...DEFAULT_THRESHOLDS_CLIENT, ...(data.value as Partial<ThresholdsConfig>) };
+  const raw = data.value as Partial<ThresholdsConfig>;
+  return {
+    ...DEFAULT_THRESHOLDS_CLIENT,
+    ...raw,
+    emergencyPhone: raw.emergencyPhone?.trim() || DEFAULT_THRESHOLDS_CLIENT.emergencyPhone,
+    nightVisionMode: raw.nightVisionMode ?? DEFAULT_THRESHOLDS_CLIENT.nightVisionMode,
+    emergencyAutoCall: raw.emergencyAutoCall ?? DEFAULT_THRESHOLDS_CLIENT.emergencyAutoCall,
+  };
 }
 
 export async function persistThresholdsConfig(next: Partial<ThresholdsConfig>): Promise<ThresholdsConfig> {
@@ -248,6 +258,32 @@ export async function logSafetyIncident(params: {
     .single();
 
   if (error) {
+    // Offline / cellular dead-zone fallback to local SQLite SHA-256 ledger when available
+    if (params.category !== 'EMERGENCY_SOS') {
+      try {
+        const localRes = await fetch('/api/incidents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: params.sessionId,
+            timestampIso,
+            category: params.category,
+            severity: params.severity,
+            stage: params.stage,
+            summary: params.summary,
+            interventionAction: params.interventionAction,
+            metrics: params.metrics ?? {},
+            frameEvidence: params.frameEvidence ?? null,
+          }),
+        });
+        if (localRes.ok) {
+          const localJson = await localRes.json();
+          if (localJson?.incident) return localJson.incident as IncidentRecord;
+        }
+      } catch {
+        // Ignore if static deployment without local API
+      }
+    }
     console.error('[DMS-9 Supabase] Incident insert error:', error.message);
     return null;
   }
@@ -275,13 +311,40 @@ export async function fetchSafetyIncidents(sessionId?: string | null, limit = 10
     q = q.eq('session_id', sessionId);
   }
   const { data, error } = await q;
-  if (error || !data) return [];
+  if (error || !data) {
+    try {
+      const qs = new URLSearchParams({ limit: String(limit) });
+      if (sessionId) qs.set('sessionId', sessionId);
+      const localRes = await fetch(`/api/incidents?${qs.toString()}`);
+      if (localRes.ok) {
+        const localJson = await localRes.json();
+        return (localJson?.incidents as IncidentRecord[]) ?? [];
+      }
+    } catch {
+      // Ignore if static deployment
+    }
+    return [];
+  }
   return data as IncidentRecord[];
 }
 
 export async function verifyBlackboxChain(): Promise<LedgerVerification> {
   const { data, error } = await supabase.rpc('dms9_verify_ledger');
   if (error || !data) {
+    try {
+      const localRes = await fetch('/api/ledger/verify');
+      if (localRes.ok) {
+        const localVerify = await localRes.json();
+        if (typeof localVerify?.valid === 'boolean') {
+          return {
+            ...localVerify,
+            engine: localVerify.engine || 'Local SQLite SHA-256 Edge Ledger',
+          } as LedgerVerification;
+        }
+      }
+    } catch {
+      // Ignore if static deployment
+    }
     return {
       valid: false,
       checkedCount: 0,

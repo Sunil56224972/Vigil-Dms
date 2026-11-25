@@ -27,13 +27,14 @@ import { OpticalViewport } from './components/OpticalViewport';
 import { BiometricOscilloscope } from './components/BiometricOscilloscope';
 import { KinematicScopes } from './components/KinematicScopes';
 import { TelemetrySourceDeck } from './components/TelemetrySourceDeck';
-import { InterventionMatrix } from './components/InterventionMatrix';
+import { InterventionMatrix, formatDialNumber } from './components/InterventionMatrix';
 import { BlackboxLedger } from './components/BlackboxLedger';
 import { MobileSensorNode } from './components/MobileSensorNode';
 import type {
   ActiveInterventionState,
   AnalyzedTelemetryReport,
   ConnectedSensorNode,
+  EmergencyCallState,
   IncidentRecord,
   KinematicMetrics,
   LedgerVerification,
@@ -106,8 +107,10 @@ const CockpitStation: React.FC = () => {
     wakeFlashActive: false,
     lockoutRequiresCheck: false,
     alertnessHoldProgress: 0,
+    sosCountdownSec: null,
     triggeredAtMs: null,
   });
+  const [emergencyCall, setEmergencyCall] = useState<EmergencyCallState | null>(null);
 
   const [driverTag, setDriverTag] = useState('Driver-01');
   const [activeSession, setActiveSession] = useState<SessionRecord | null>(null);
@@ -144,7 +147,31 @@ const CockpitStation: React.FC = () => {
     sourceModes: new Set<string>(),
   });
 
+  const kinematicLatestRef = useRef<KinematicMetrics>(kinematicMetrics);
+  kinematicLatestRef.current = kinematicMetrics;
+  const ocularLatestRef = useRef<OcularMetrics>(ocularMetrics);
+  ocularLatestRef.current = ocularMetrics;
+
   const captureOpticalEvidence = useCallback((): string | null => {
+    // Prefer enhanced Night-IR canvas when low-light restoration is active so night snapshots are clear
+    const enh = ocularLatestRef.current.nightVisionActive
+      ? ocularEngineRef.current.getEnhancedCanvas()
+      : null;
+    if (enh && enh.width > 0 && enh.height > 0) {
+      try {
+        const off = document.createElement('canvas');
+        off.width = 320;
+        off.height = Math.round((320 * enh.height) / enh.width);
+        const ctx = off.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(enh, 0, 0, off.width, off.height);
+          return off.toDataURL('image/jpeg', 0.68);
+        }
+      } catch {
+        // Fall through to raw video snapshot
+      }
+    }
+
     const vid = videoRef.current;
     if (!vid || vid.readyState < 2 || vid.videoWidth === 0) return null;
     try {
@@ -154,11 +181,106 @@ const CockpitStation: React.FC = () => {
       const ctx = off.getContext('2d');
       if (!ctx) return null;
       ctx.drawImage(vid, 0, 0, off.width, off.height);
-      return off.toDataURL('image/jpeg', 0.62);
+      return off.toDataURL('image/jpeg', 0.65);
     } catch {
       return null;
     }
   }, []);
+
+  const triggerEmergencyCall = useCallback(
+    (reason: string, autoTriggered = false) => {
+      const th = thresholdsRef.current;
+      const kin = kinematicLatestRef.current;
+      const dial = formatDialNumber(th.emergencyPhone || '7389416622');
+
+      interventionEngineRef.current.announceEmergencyCall(
+        th.emergencyPhone || '7389416622',
+        th.audioArmed,
+        th.voiceArmed
+      );
+
+      setEmergencyCall({
+        active: true,
+        phoneRaw: th.emergencyPhone || '7389416622',
+        phoneDial: dial.display,
+        reason,
+        startedAtMs: Date.now(),
+        autoTriggered,
+        lat: kin.lat,
+        lon: kin.lon,
+        speedKmh: kin.speedKmh,
+      });
+
+      // For automatic SOS (no anchor click), invoke OS/mobile tel: handler directly
+      if (autoTriggered && typeof document !== 'undefined') {
+        try {
+          const a = document.createElement('a');
+          a.href = dial.telHref;
+          a.style.display = 'none';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        } catch {
+          // Ignore if headless/desktop without registered tel: app
+        }
+      }
+
+      const snap = captureOpticalEvidence();
+      let addedCloudIncident = false;
+      logSafetyIncident({
+        sessionId: activeSessionRef.current?.id ?? null,
+        category: 'EMERGENCY_SOS',
+        severity: 'CRITICAL',
+        stage: 3,
+        summary: `Emergency SOS call initiated to ${dial.display} (${reason})`,
+        interventionAction: 'EMERGENCY_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS',
+        metrics: {
+          dialNumber: dial.display,
+          reason,
+          autoTriggered,
+          speedKmh: kin.speedKmh,
+          lat: kin.lat,
+          lon: kin.lon,
+          earMean: ocularLatestRef.current.earMean,
+          perclos60: ocularLatestRef.current.perclos60,
+          nightVisionActive: ocularLatestRef.current.nightVisionActive,
+        },
+        frameEvidence: snap,
+        webhookUrl: th.webhookUrl,
+      }).then((saved) => {
+        if (saved) {
+          addedCloudIncident = true;
+          setIncidents((prev) => (prev.some((x) => x.id === saved.id) ? prev : [saved, ...prev]));
+        }
+      });
+
+      // Notify local gateway (and populate offline UI ledger if cloud is unreachable)
+      fetch('/api/emergency/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: activeSessionRef.current?.id ?? null,
+          phone: dial.display,
+          reason,
+          autoTriggered,
+          speedKmh: kin.speedKmh,
+          lat: kin.lat,
+          lon: kin.lon,
+          frameEvidence: snap,
+        }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.incident && !addedCloudIncident) {
+            setIncidents((prev) =>
+              prev.some((x) => x.id === data.incident.id) ? prev : [data.incident, ...prev]
+            );
+          }
+        })
+        .catch(() => {});
+    },
+    [captureOpticalEvidence]
+  );
 
   useEffect(() => {
     if (!cockpitGridRef.current) return;
@@ -322,6 +444,10 @@ const CockpitStation: React.FC = () => {
       hazRef = evalOut.state.hazardStrobeActive;
       autoDecelRef = evalOut.autoDecelerateAssist;
 
+      if (evalOut.triggerAutoEmergencyCall) {
+        triggerEmergencyCall('Auto-SOS: Unresponsive Stage-3 microsleep', true);
+      }
+
       if (evalOut.emittedIncidents.length > 0) {
         for (const ev of evalOut.emittedIncidents) {
           const snap = ev.captureOpticalSnapshot ? captureOpticalEvidence() : null;
@@ -386,7 +512,7 @@ const CockpitStation: React.FC = () => {
 
     rafId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(rafId);
-  }, [captureOpticalEvidence]);
+  }, [captureOpticalEvidence, triggerEmergencyCall]);
 
   const stopOpticalFeed = useCallback(() => {
     if (mediaStreamRef.current) {
@@ -701,6 +827,7 @@ const CockpitStation: React.FC = () => {
             <OpticalViewport
               videoRef={videoRef}
               hudCanvasRef={hudCanvasRef}
+              getEnhancedCanvas={() => ocularEngineRef.current.getEnhancedCanvas()}
               metrics={ocularMetrics}
               overlayRef={overlayRef}
               thresholds={thresholds}
@@ -710,6 +837,7 @@ const CockpitStation: React.FC = () => {
               onStopOptical={stopOpticalFeed}
               onUploadVideoFile={handleUploadDriverVideo}
               onCalibrateNeutral={() => ocularEngineRef.current.startNeutralCalibration()}
+              onChangeNightVisionMode={(mode) => handleUpdateThresholds({ nightVisionMode: mode })}
             />
 
             <BiometricOscilloscope metrics={ocularMetrics} thresholds={thresholds} />
@@ -756,6 +884,7 @@ const CockpitStation: React.FC = () => {
           <div className="cockpit-col">
             <InterventionMatrix
               intervention={intervention}
+              emergencyCall={emergencyCall}
               thresholds={thresholds}
               recentIncidents={incidents}
               onUpdateThresholds={handleUpdateThresholds}
@@ -767,6 +896,9 @@ const CockpitStation: React.FC = () => {
                   thresholds.voiceArmed
                 )
               }
+              onTriggerEmergencyCall={(reason) => triggerEmergencyCall(reason, false)}
+              onCancelAutoSos={() => interventionEngineRef.current.cancelAutoSosCountdown()}
+              onDismissEmergencyCall={() => setEmergencyCall(null)}
               onSelectIncidentForensics={(inc) => {
                 setSelectedIncident(inc);
                 setViewMode('FORENSICS');

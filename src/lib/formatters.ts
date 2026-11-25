@@ -11,6 +11,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   RAPID_ACCELERATION: 'Rapid Acceleration',
   SPEEDING: 'Speed Limit Breach',
   RASH_DRIVING: 'Rash Maneuver',
+  EMERGENCY_SOS: 'Emergency SOS Call',
 };
 
 const ACTION_TOKEN_MAP: Record<string, string> = {
@@ -53,6 +54,8 @@ const ACTION_TOKEN_MAP: Record<string, string> = {
   LATERAL_LOAD_WARNING: 'Lateral load tone',
   CABIN_ALERT: 'Cabin chime',
   AUDIO_VISUAL_ALERT: 'Cabin alert',
+  EMERGENCY_VOICE_CALL: 'Emergency call dialed',
+  GPS_SOS_DISPATCH: 'GPS & telemetry sent',
 };
 
 export function formatCategoryLabel(category: IncidentCategory | string): string {

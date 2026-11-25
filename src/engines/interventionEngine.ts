@@ -120,6 +120,34 @@ class CabinAcousticSynthesizer {
       this.sirenInterval = null;
     }
   }
+
+  playEmergencyRingback(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    // Standard Indian/ITU dual-tone cadence (400 Hz + 425 Hz: 0.4s ON, 0.2s OFF, 0.4s ON)
+    const bursts = [
+      [0.0, 0.38],
+      [0.58, 0.96],
+      [2.5, 2.88],
+      [3.08, 3.46],
+    ];
+    for (const [tStart, tEnd] of bursts) {
+      for (const freq of [400, 425]) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + tStart);
+        gain.gain.setValueAtTime(0.0001, now + tStart);
+        gain.gain.exponentialRampToValueAtTime(0.11, now + tStart + 0.02);
+        gain.gain.setValueAtTime(0.11, now + tEnd - 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + tEnd);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now + tStart);
+        osc.stop(now + tEnd + 0.01);
+      }
+    }
+  }
 }
 
 export class PreventiveInterventionEngine {
@@ -132,6 +160,9 @@ export class PreventiveInterventionEngine {
   private governorActive = false;
   private hazardStrobeActive = false;
   private alertnessRecoveryMs = 0;
+  private unresponsiveSosMs = 0;
+  private lastAutoSosAtMs = -60000;
+  private autoSosSuppressedForCycle = false;
   private lastEvalMs = 0;
   private activeBannerUntilMs = 0;
   private lastActiveState: ActiveInterventionState = {
@@ -144,6 +175,7 @@ export class PreventiveInterventionEngine {
     wakeFlashActive: false,
     lockoutRequiresCheck: false,
     alertnessHoldProgress: 0,
+    sosCountdownSec: null,
     triggeredAtMs: null,
   };
 
@@ -169,6 +201,8 @@ export class PreventiveInterventionEngine {
     this.governorActive = false;
     this.hazardStrobeActive = false;
     this.alertnessRecoveryMs = 0;
+    this.unresponsiveSosMs = 0;
+    this.autoSosSuppressedForCycle = false;
     this.synth.stopCriticalSiren();
     this.lastActiveState = {
       stage: 0,
@@ -180,8 +214,28 @@ export class PreventiveInterventionEngine {
       wakeFlashActive: false,
       lockoutRequiresCheck: false,
       alertnessHoldProgress: 0,
+      sosCountdownSec: null,
       triggeredAtMs: null,
     };
+  }
+
+  cancelAutoSosCountdown(): void {
+    this.unresponsiveSosMs = 0;
+    this.autoSosSuppressedForCycle = true;
+  }
+
+  announceEmergencyCall(phoneRaw: string, audioArmed: boolean, voiceArmed: boolean): void {
+    this.synth.unlock();
+    if (audioArmed) {
+      this.synth.playEmergencyRingback();
+    }
+    const digitsSpoken = phoneRaw.replace(/\D/g, '').slice(-10).split('').join(' ');
+    this.speakCallout(
+      'EMERGENCY_SOS',
+      `Calling emergency number ${digitsSpoken || phoneRaw}. Transmitting GPS location and driver telemetry.`,
+      voiceArmed,
+      3000
+    );
   }
 
   private speakCallout(key: string, phrase: string, armed: boolean, cooldownMs = 8000): void {
@@ -218,6 +272,7 @@ export class PreventiveInterventionEngine {
     state: ActiveInterventionState;
     emittedIncidents: EmittedSafetyIncident[];
     autoDecelerateAssist: boolean;
+    triggerAutoEmergencyCall: boolean;
   } {
     const now = performance.now();
     const dtMs = this.lastEvalMs > 0 ? Math.min(200, now - this.lastEvalMs) : 33;
@@ -607,6 +662,46 @@ export class PreventiveInterventionEngine {
       this.hazardStrobeActive = false;
     }
 
+    // --- 4. UNRESPONSIVE DRIVER AUTO-SOS COUNTDOWN (5s unrecovered Stage-3 Microsleep) ---
+    let sosCountdownSec: number | null = null;
+    let triggerAutoEmergencyCall = false;
+    const hasPhone = Boolean((thresholds.emergencyPhone || '').trim());
+    const unrecoveredInMicrosleepLockout =
+      this.lockoutActive &&
+      ocular.active &&
+      !(
+        ocular.faceDetected &&
+        ocular.eyeClosedMs === 0 &&
+        ocular.distractionHoldMs === 0 &&
+        ocular.headNodHoldMs === 0
+      );
+
+    if (
+      (isActivelyMicrosleeping || unrecoveredInMicrosleepLockout) &&
+      thresholds.emergencyAutoCall &&
+      hasPhone &&
+      !this.autoSosSuppressedForCycle &&
+      now - this.lastAutoSosAtMs > 35000
+    ) {
+      this.unresponsiveSosMs += dtMs;
+      const SOS_DELAY_MS = 5000;
+      if (this.unresponsiveSosMs >= SOS_DELAY_MS) {
+        triggerAutoEmergencyCall = true;
+        this.lastAutoSosAtMs = now;
+        this.unresponsiveSosMs = 0;
+        this.autoSosSuppressedForCycle = true;
+        sosCountdownSec = null;
+      } else {
+        sosCountdownSec = Math.max(1, Math.ceil((SOS_DELAY_MS - this.unresponsiveSosMs) / 1000));
+      }
+    } else {
+      this.unresponsiveSosMs = Math.max(0, this.unresponsiveSosMs - dtMs * 2);
+      if (!this.lockoutActive) {
+        this.autoSosSuppressedForCycle = false;
+        this.unresponsiveSosMs = 0;
+      }
+    }
+
     // Hold alert banner readable for 2.2s so transient impulses don't flicker unreadably
     if (frameStage >= 1) {
       this.activeBannerUntilMs = now + 2200;
@@ -620,6 +715,7 @@ export class PreventiveInterventionEngine {
         wakeFlashActive: wakeFlash,
         lockoutRequiresCheck: this.lockoutActive,
         alertnessHoldProgress: Number(alertnessHoldProgress.toFixed(2)),
+        sosCountdownSec,
         triggeredAtMs: now,
       };
     } else if (this.lockoutActive) {
@@ -633,6 +729,7 @@ export class PreventiveInterventionEngine {
         wakeFlashActive: false,
         lockoutRequiresCheck: true,
         alertnessHoldProgress: Number(alertnessHoldProgress.toFixed(2)),
+        sosCountdownSec,
         triggeredAtMs: this.lastActiveState.triggeredAtMs,
       };
     } else if (now >= this.activeBannerUntilMs) {
@@ -646,6 +743,7 @@ export class PreventiveInterventionEngine {
         wakeFlashActive: false,
         lockoutRequiresCheck: false,
         alertnessHoldProgress: 0,
+        sosCountdownSec: null,
         triggeredAtMs: null,
       };
     } else {
@@ -654,6 +752,7 @@ export class PreventiveInterventionEngine {
         wakeFlashActive: false,
         governorActive: this.governorActive,
         hazardStrobeActive: this.hazardStrobeActive,
+        sosCountdownSec,
       };
     }
 
@@ -664,6 +763,7 @@ export class PreventiveInterventionEngine {
       state: this.lastActiveState,
       emittedIncidents: emitted,
       autoDecelerateAssist,
+      triggerAutoEmergencyCall,
     };
   }
 }

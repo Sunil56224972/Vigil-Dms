@@ -67,6 +67,7 @@ $$\mathrm{EAR} = \frac{\lVert p_2 - p_6 \rVert + \lVert p_3 - p_5 \rVert}{2 \lVe
   - `>= 1500 ms`: Stage-3 Critical Microsleep intervention.
 - **Rolling 60-Second PERCLOS (P80)**: Computes the proportion of frame time within a sliding 60-second window where eyelids remain closed past the calibrated P80 threshold (`>= 12%` advisory, `>= 20%` drowsiness warning).
 - **Mouth Aspect Ratio (MAR) & Temporal Yawn Filter**: Evaluates vertical-to-horizontal inner lip aperture (`[13, 14]`, `[81, 178]`, `[311, 402]` over `[78, 308]`). Requires continuous hold `>= 1.6 s` above `0.54` MAR so speech does not misclassify as yawning.
+- **Adaptive Night-Vision / Low-Light Signal Restoration (`Night IR`, up to `+18.0 dB`)**: Samples a 256-bin luminance histogram on every frame prior to inference (`< 86` luma auto-engage with hysteresis at `> 98` luma, plus manual `Auto / On / Off`). Applies `2nd–98.5th` percentile histogram stretching, balanced shadow-lift gamma (`0.66–0.84`), and an S-curve micro-contrast lookup table into an offscreen Near-IR canvas passed directly into `FaceLandmarker.detectForVideo(...)`—preserving full 478-point landmark lock, eyelid EAR accuracy, and clear JPEG incident snapshots in dark night cabins.
 - **3D Cranial Pose & Iris Gaze Cone**: Decomposes the 4×4 column-major facial transformation matrix into Euler `Pitch`, `Yaw`, and `Roll` angles while measuring iris center offsets (`landmarks 468 & 473`) inside each eye socket to flag head nodding (`pitch <= -15.5°` for `>= 1.2 s`) and off-road visual distraction (`|yaw| >= 24°` or extreme iris deviation for `>= 1.5 s`).
 
 ---
@@ -102,6 +103,7 @@ Built-in presets also cover **Heavy Freight Haulage (`CLASS-N3`)**, **Passenger 
 | **Stage 1** | `Advisory` | Dual-tone Web Audio harmonic chime (`523 Hz → 659 Hz`) + HUD posture/early-fatigue prompt. |
 | **Stage 2** | `Active Warning` | Pulsed warning cadence + spoken cabin `SpeechSynthesis` directive + incident committed to Supabase with JPEG camera frame snapshot. |
 | **Stage 3** | `Critical Intervention` | Alternating `960 / 1320 Hz` wake siren + peripheral cabin border strobe + **Speed Governor cap (`40 km/h`)** + **4-Way Hazard Beacons** + unacknowledged microsleep safe-deceleration assist. |
+| **Emergency SOS** | `Unresponsive / 1-Tap SOS` | Automatic **5-second Auto-SOS countdown** on unrecovered Stage-3 microsleep (plus 1-tap manual dial in cockpit & `/sensor` mobile node) invoking native `tel:` voice dialing (default `+917389416622`), ITU `400/425 Hz` ringback + spoken confirmation, `SMS GPS` / `WhatsApp SOS` coordinate links, and `EMERGENCY_SOS` SHA-256 ledger logging (with local SQLite fallback when offline). |
 
 Clearing a Stage-3 microsleep lockout requires **2.5 seconds of continuous open-eye forward gaze** verified by the ocular engine (or explicit manual operator reset).
 

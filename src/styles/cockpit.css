@@ -183,6 +183,12 @@
   color: var(--bg-surface);
 }
 
+.hw-btn.selected:hover:not(:disabled) {
+  background: var(--btn-primary-hover);
+  border-color: var(--btn-primary-hover);
+  color: var(--bg-surface);
+}
+
 /* Stop / Disconnect Action (Neutral Surface — Zero Tinted Red Ghost Box) */
 .hw-btn.danger {
   background: var(--btn-secondary-bg);
