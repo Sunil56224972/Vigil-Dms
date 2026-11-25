@@ -266,6 +266,7 @@ async function bootstrap() {
 
     const pstnResult = await dispatchTwilioVoiceCall({
       to: dialNumber,
+      driverTag: body.driverTag,
       reason: body.reason || 'Driver emergency',
       speedKmh: body.speedKmh,
       lat: body.lat,
@@ -273,6 +274,8 @@ async function bootstrap() {
       twilioSid: body.twilioSid,
       twilioToken: body.twilioToken,
       twilioFrom: body.twilioFrom,
+      fast2smsKey: body.fast2smsKey,
+      callmebotKey: body.callmebotKey,
     }).catch((err) => ({
       ok: false,
       pstnDispatched: false,

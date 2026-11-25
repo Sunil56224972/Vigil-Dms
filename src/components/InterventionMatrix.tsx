@@ -62,22 +62,48 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
   const prevTopIdRef = useRef<string | null>(recentIncidents[0]?.id ?? null);
   const [callElapsedSec, setCallElapsedSec] = useState(0);
   const [showPstnSetup, setShowPstnSetup] = useState(false);
-  const [twilioCfg, setTwilioCfg] = useState<{ sid: string; token: string; from: string }>(() => {
+  const [twilioCfg, setTwilioCfg] = useState<{
+    callmebotKey: string;
+    fast2smsKey: string;
+    sid: string;
+    token: string;
+    from: string;
+    autoOpenApp: boolean;
+  }>(() => {
     try {
       const raw = localStorage.getItem('vigil_pstn_twilio');
       if (raw) {
         const parsed = JSON.parse(raw);
         return {
+          callmebotKey: String(parsed.callmebotKey || ''),
+          fast2smsKey: String(parsed.fast2smsKey || ''),
           sid: String(parsed.sid || ''),
           token: String(parsed.token || ''),
           from: String(parsed.from || ''),
+          autoOpenApp: parsed.autoOpenApp !== false,
         };
       }
     } catch {}
-    return { sid: '', token: '', from: '' };
+    return {
+      callmebotKey: '',
+      fast2smsKey: '',
+      sid: '',
+      token: '',
+      from: '',
+      autoOpenApp: true,
+    };
   });
 
-  const updateTwilioCfg = (patch: Partial<{ sid: string; token: string; from: string }>) => {
+  const updateTwilioCfg = (
+    patch: Partial<{
+      callmebotKey: string;
+      fast2smsKey: string;
+      sid: string;
+      token: string;
+      from: string;
+      autoOpenApp: boolean;
+    }>
+  ) => {
     setTwilioCfg((prev) => {
       const next = { ...prev, ...patch };
       try {
@@ -87,8 +113,10 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
     });
   };
 
-  const hasLocalTwilio = Boolean(
-    twilioCfg.sid.trim() && twilioCfg.token.trim() && twilioCfg.from.trim()
+  const hasCloudGateway = Boolean(
+    twilioCfg.callmebotKey.trim() ||
+      twilioCfg.fast2smsKey.trim() ||
+      (twilioCfg.sid.trim() && twilioCfg.token.trim() && twilioCfg.from.trim())
   );
   const isMobileBrowser =
     typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -369,20 +397,20 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Emergency SOS Call</div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Emergency SOS Auto-Msg &amp; Call</div>
                 <div style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
-                  Cloud PSTN voice call + 5s microsleep Auto-SOS
+                  Auto-sends SOS + live GPS on 5s microsleep
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button
                   type="button"
-                  className={`hw-btn ${hasLocalTwilio || showPstnSetup ? 'selected' : ''}`}
+                  className={`hw-btn ${hasCloudGateway || showPstnSetup ? 'selected' : ''}`}
                   style={{ height: 22, padding: '0 7px', fontSize: 10.5 }}
                   onClick={() => setShowPstnSetup((v) => !v)}
-                  title="Configure Cloud PSTN Voice Gateway (Twilio) to ring mobile phones directly from a PC"
+                  title="Configure automatic SMS / WhatsApp / Push / Voice gateways"
                 >
-                  {hasLocalTwilio ? 'PSTN Ready' : 'Cloud PSTN'}
+                  {hasCloudGateway ? 'Auto-Msg Ready' : 'Auto-Msg Setup'}
                 </button>
                 <span style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>Auto-SOS</span>
                 <button
@@ -407,41 +435,100 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
                   borderRadius: 4,
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: 5,
+                  gap: 6,
                 }}
               >
-                <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', lineHeight: 1.35 }}>
-                  <strong>Cloud PSTN Voice Gateway (Twilio):</strong> Required to place real cellular calls from a laptop/PC. Stored privately in this browser only.
+                <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', lineHeight: 1.38 }}>
+                  <strong>1. Zero-Key Instant Phone Alert (Works Immediately):</strong> Open{' '}
+                  <a
+                    href={`https://ntfy.sh/vigil-sos-${dialInfo.cleanDigits.slice(-10)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mono"
+                    style={{ color: 'var(--ink-primary)' }}
+                  >
+                    ntfy.sh/vigil-sos-{dialInfo.cleanDigits.slice(-10)}
+                  </a>{' '}
+                  on your phone and tap <em>Subscribe</em> to receive instant background SOS alerts + GPS map.
                 </div>
-                <input
-                  type="text"
-                  className="hw-input mono"
-                  style={{ height: 26, fontSize: 11 }}
-                  placeholder="Twilio Account SID (AC...)"
-                  value={twilioCfg.sid}
-                  onChange={(e) => updateTwilioCfg({ sid: e.target.value })}
-                />
-                <input
-                  type="password"
-                  className="hw-input mono"
-                  style={{ height: 26, fontSize: 11 }}
-                  placeholder="Twilio Auth Token"
-                  value={twilioCfg.token}
-                  onChange={(e) => updateTwilioCfg({ token: e.target.value })}
-                />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 5 }}>
+
+                <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 5 }}>
+                  <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', marginBottom: 4 }}>
+                    <strong>2. Free Automatic WhatsApp (CallMeBot):</strong>{' '}
+                    <a
+                      href="https://www.callmebot.com/blog/free-api-whatsapp-messages/"
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: 'var(--ink-primary)' }}
+                    >
+                      Get free WhatsApp API key
+                    </a>
+                  </div>
                   <input
-                    type="tel"
+                    type="text"
                     className="hw-input mono"
-                    style={{ height: 26, fontSize: 11 }}
-                    placeholder="Twilio From Number (e.g. +1256...)"
-                    value={twilioCfg.from}
-                    onChange={(e) => updateTwilioCfg({ from: e.target.value })}
+                    style={{ width: '100%', height: 26, fontSize: 11 }}
+                    placeholder="CallMeBot WhatsApp API Key (6 digits)"
+                    value={twilioCfg.callmebotKey}
+                    onChange={(e) => updateTwilioCfg({ callmebotKey: e.target.value })}
                   />
+                </div>
+
+                <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 5 }}>
+                  <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', marginBottom: 4 }}>
+                    <strong>3. Automatic Indian SMS (+91 Fast2SMS) or Twilio SMS + Call:</strong>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <input
+                      type="password"
+                      className="hw-input mono"
+                      style={{ height: 26, fontSize: 11 }}
+                      placeholder="Fast2SMS API Key (instant +91 cellular SMS)"
+                      value={twilioCfg.fast2smsKey}
+                      onChange={(e) => updateTwilioCfg({ fast2smsKey: e.target.value })}
+                    />
+                    <input
+                      type="text"
+                      className="hw-input mono"
+                      style={{ height: 26, fontSize: 11 }}
+                      placeholder="Twilio Account SID (AC...)"
+                      value={twilioCfg.sid}
+                      onChange={(e) => updateTwilioCfg({ sid: e.target.value })}
+                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                      <input
+                        type="password"
+                        className="hw-input mono"
+                        style={{ height: 26, fontSize: 11 }}
+                        placeholder="Twilio Auth Token"
+                        value={twilioCfg.token}
+                        onChange={(e) => updateTwilioCfg({ token: e.target.value })}
+                      />
+                      <input
+                        type="tel"
+                        className="hw-input mono"
+                        style={{ height: 26, fontSize: 11 }}
+                        placeholder="Twilio From (+1...)"
+                        value={twilioCfg.from}
+                        onChange={(e) => updateTwilioCfg({ from: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 2 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: 'var(--ink-secondary)', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={twilioCfg.autoOpenApp}
+                      onChange={(e) => updateTwilioCfg({ autoOpenApp: e.target.checked })}
+                    />
+                    Auto-launch WhatsApp / SMS app if no API key
+                  </label>
                   <button
                     type="button"
                     className="hw-btn"
-                    style={{ height: 26, padding: '0 9px', fontSize: 10.5 }}
+                    style={{ height: 24, padding: '0 9px', fontSize: 10.5 }}
                     onClick={() => setShowPstnSetup(false)}
                   >
                     Done
@@ -462,21 +549,21 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
               />
               {isMobileBrowser ? (
                 <a
-                  href={dialInfo.telHref}
+                  href={`sms:${dialInfo.display}?body=${sosBodyText}`}
                   className="hw-btn danger"
                   style={{ textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}
-                  onClick={() => onTriggerEmergencyCall('Manual emergency SOS call')}
+                  onClick={() => onTriggerEmergencyCall('Manual emergency SOS alert')}
                 >
-                  Call {dialInfo.cleanDigits.slice(-10)}
+                  SOS Msg {dialInfo.cleanDigits.slice(-10)}
                 </a>
               ) : (
                 <button
                   type="button"
                   className="hw-btn danger"
                   style={{ fontWeight: 600, whiteSpace: 'nowrap' }}
-                  onClick={() => onTriggerEmergencyCall('Manual emergency SOS call')}
+                  onClick={() => onTriggerEmergencyCall('Manual emergency SOS alert')}
                 >
-                  Call {dialInfo.cleanDigits.slice(-10)}
+                  Send SOS {dialInfo.cleanDigits.slice(-10)}
                 </button>
               )}
             </div>
@@ -536,7 +623,7 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span className="hw-led crit" />
                     <span className="mono" style={{ fontSize: 11.5, fontWeight: 600 }}>
-                      Calling {emergencyCall.phoneDial}
+                      SOS Dispatched → {emergencyCall.phoneDial}
                     </span>
                   </div>
                   <span className="mono" style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
@@ -589,7 +676,7 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
                           cursor: 'pointer',
                         }}
                       >
-                        Configure Twilio PSTN
+                        Auto-Msg Setup
                       </button>
                     )}
                   </div>

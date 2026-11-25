@@ -154,6 +154,25 @@ const CockpitStation: React.FC = () => {
   ocularLatestRef.current = ocularMetrics;
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const persistTimerRef = useRef<number | null>(null);
+  const fallbackGpsRef = useRef<{ lat: number | null; lon: number | null }>({
+    lat: null,
+    lon: null,
+  });
+
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          fallbackGpsRef.current = {
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude,
+          };
+        },
+        () => {},
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+      );
+    }
+  }, []);
 
   const captureOpticalEvidenceAsync = useCallback((): Promise<string | null> => {
     const enh = ocularLatestRef.current.nightVisionActive
@@ -213,6 +232,8 @@ const CockpitStation: React.FC = () => {
     (reason: string, autoTriggered = false) => {
       const th = thresholdsRef.current;
       const kin = kinematicLatestRef.current;
+      const lat = kin.lat ?? fallbackGpsRef.current.lat;
+      const lon = kin.lon ?? fallbackGpsRef.current.lon;
       const dial = formatDialNumber(th.emergencyPhone || '7389416622');
 
       // 1. Commit lightweight UI state immediately (<4ms INP) so button click paints on next frame
@@ -223,28 +244,14 @@ const CockpitStation: React.FC = () => {
         reason,
         startedAtMs: Date.now(),
         autoTriggered,
-        lat: kin.lat,
-        lon: kin.lon,
+        lat,
+        lon,
         speedKmh: kin.speedKmh,
         pstnStatus: 'DIALING',
-        pstnMessage: `Contacting PSTN voice gateway & paired /sensor nodes for ${dial.display}…`,
+        pstnMessage: `Auto-sending emergency SOS message & GPS alert to ${dial.display}…`,
       });
 
-      // On mobile browsers (with a SIM dialer), invoke tel: URI on Auto-SOS too
-      const isMobile =
-        typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      if (autoTriggered && isMobile && typeof document !== 'undefined') {
-        try {
-          const a = document.createElement('a');
-          a.href = dial.telHref;
-          a.style.display = 'none';
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        } catch {}
-      }
-
-      // 2. Defer audio synthesis, off-thread JPEG encoding, Realtime broadcast & PSTN fetch past next paint
+      // 2. Defer audio synthesis, off-thread JPEG encoding, Realtime broadcast & multi-channel SMS/WhatsApp/Push dispatch
       window.setTimeout(async () => {
         interventionEngineRef.current.announceEmergencyCall(
           th.emergencyPhone || '7389416622',
@@ -256,22 +263,66 @@ const CockpitStation: React.FC = () => {
           dialNumber: dial.display,
           reason,
           speedKmh: kin.speedKmh,
-          lat: kin.lat,
-          lon: kin.lon,
+          lat,
+          lon,
         });
 
-        let twilioLocal = { sid: '', token: '', from: '' };
+        let gatewayCfg = {
+          callmebotKey: '',
+          fast2smsKey: '',
+          sid: '',
+          token: '',
+          from: '',
+          autoOpenApp: true,
+        };
         try {
           const rawTw = localStorage.getItem('vigil_pstn_twilio');
           if (rawTw) {
             const parsed = JSON.parse(rawTw);
-            twilioLocal = {
+            gatewayCfg = {
+              callmebotKey: String(parsed.callmebotKey || ''),
+              fast2smsKey: String(parsed.fast2smsKey || ''),
               sid: String(parsed.sid || ''),
               token: String(parsed.token || ''),
               from: String(parsed.from || ''),
+              autoOpenApp: parsed.autoOpenApp !== false,
             };
           }
         } catch {}
+
+        const hasSilentApi = Boolean(
+          gatewayCfg.callmebotKey.trim() ||
+            gatewayCfg.fast2smsKey.trim() ||
+            (gatewayCfg.sid.trim() && gatewayCfg.token.trim() && gatewayCfg.from.trim())
+        );
+
+        // If no background SMS/WhatsApp API key is configured yet, auto-launch native SMS (mobile) or WhatsApp Desktop/Web with pre-filled SOS + GPS
+        if (!hasSilentApi && gatewayCfg.autoOpenApp && typeof window !== 'undefined') {
+          const mapsPart =
+            lat != null && lon != null
+              ? ` · Live GPS: https://maps.google.com/?q=${lat.toFixed(5)},${lon.toFixed(5)}`
+              : '';
+          const msgBody = encodeURIComponent(
+            `[VIGIL DMS EMERGENCY SOS] ${reason} · Speed ${kin.speedKmh.toFixed(0)} km/h${mapsPart} · Immediate assistance required.`
+          );
+          const isMob = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+          try {
+            if (isMob) {
+              if (autoTriggered) {
+                const a = document.createElement('a');
+                a.href = `sms:${dial.display}?body=${msgBody}`;
+                a.style.display = 'none';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+              }
+            } else {
+              // Launch installed WhatsApp Desktop app (or WhatsApp Web fallback tab) pre-addressed to +917389416622
+              const waDigits = dial.display.replace(/\D/g, '');
+              window.open(`https://wa.me/${waDigits}?text=${msgBody}`, '_blank', 'noopener,noreferrer');
+            }
+          } catch {}
+        }
 
         const snap = await captureOpticalEvidenceAsync();
         let addedCloudIncident = false;
@@ -280,15 +331,15 @@ const CockpitStation: React.FC = () => {
           category: 'EMERGENCY_SOS',
           severity: 'CRITICAL',
           stage: 3,
-          summary: `Emergency SOS call initiated to ${dial.display} (${reason})`,
+          summary: `Emergency SOS message & alert dispatched to ${dial.display} (${reason})`,
           interventionAction: 'EMERGENCY_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS',
           metrics: {
             dialNumber: dial.display,
             reason,
             autoTriggered,
             speedKmh: kin.speedKmh,
-            lat: kin.lat,
-            lon: kin.lon,
+            lat,
+            lon,
             earMean: ocularLatestRef.current.earMean,
             perclos60: ocularLatestRef.current.perclos60,
             nightVisionActive: ocularLatestRef.current.nightVisionActive,
@@ -307,16 +358,19 @@ const CockpitStation: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             sessionId: activeSessionRef.current?.id ?? null,
+            driverTag,
             phone: dial.display,
             reason,
             autoTriggered,
             speedKmh: kin.speedKmh,
-            lat: kin.lat,
-            lon: kin.lon,
+            lat,
+            lon,
             frameEvidence: snap,
-            twilioSid: twilioLocal.sid,
-            twilioToken: twilioLocal.token,
-            twilioFrom: twilioLocal.from,
+            twilioSid: gatewayCfg.sid,
+            twilioToken: gatewayCfg.token,
+            twilioFrom: gatewayCfg.from,
+            fast2smsKey: gatewayCfg.fast2smsKey,
+            callmebotKey: gatewayCfg.callmebotKey,
           }),
         })
           .then((r) => r.json().catch(() => null))
@@ -346,14 +400,14 @@ const CockpitStation: React.FC = () => {
                     ...prev,
                     pstnStatus: 'NO_GATEWAY',
                     pstnMessage:
-                      'PSTN gateway unreachable — use OS Dialer, WhatsApp SOS, or paired /sensor phone.',
+                      'Cloud gateway unreachable — WhatsApp / SMS & paired /sensor SOS triggered.',
                   }
                 : prev
             );
           });
       }, 0);
     },
-    [captureOpticalEvidenceAsync]
+    [captureOpticalEvidenceAsync, driverTag]
   );
 
   useEffect(() => {
