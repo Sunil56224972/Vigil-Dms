@@ -62,6 +62,84 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
   const prevTopIdRef = useRef<string | null>(recentIncidents[0]?.id ?? null);
   const [callElapsedSec, setCallElapsedSec] = useState(0);
   const [showPstnSetup, setShowPstnSetup] = useState(false);
+  const [waBridge, setWaBridge] = useState<{
+    available: boolean;
+    state: 'IDLE' | 'CONNECTING' | 'QR_READY' | 'CONNECTED';
+    qrDataUrl: string | null;
+    pairingCode: string | null;
+    connectedUser: string | null;
+  }>({
+    available: false,
+    state: 'IDLE',
+    qrDataUrl: null,
+    pairingCode: null,
+    connectedUser: null,
+  });
+
+  useEffect(() => {
+    let active = true;
+    const pollWa = () => {
+      fetch('/api/whatsapp/status')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (active && d?.whatsapp) {
+            setWaBridge({
+              available: true,
+              state: d.whatsapp.state || 'IDLE',
+              qrDataUrl: d.whatsapp.qrDataUrl || null,
+              pairingCode: d.whatsapp.pairingCode || null,
+              connectedUser: d.whatsapp.connectedUser || null,
+            });
+          }
+        })
+        .catch(() => {});
+    };
+    pollWa();
+    const timer = showPstnSetup ? window.setInterval(pollWa, 1800) : null;
+    return () => {
+      active = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [showPstnSetup]);
+
+  const handleConnectBuiltInWhatsApp = () => {
+    setWaBridge((p) => ({ ...p, state: 'CONNECTING' }));
+    fetch('/api/whatsapp/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: thresholds.emergencyPhone || '7389416622' }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.whatsapp) {
+          setWaBridge({
+            available: true,
+            state: d.whatsapp.state || 'CONNECTING',
+            qrDataUrl: d.whatsapp.qrDataUrl || null,
+            pairingCode: d.whatsapp.pairingCode || null,
+            connectedUser: d.whatsapp.connectedUser || null,
+          });
+        }
+      })
+      .catch(() => {});
+  };
+
+  const handleDisconnectBuiltInWhatsApp = () => {
+    fetch('/api/whatsapp/disconnect', { method: 'POST' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.whatsapp) {
+          setWaBridge({
+            available: true,
+            state: 'IDLE',
+            qrDataUrl: null,
+            pairingCode: null,
+            connectedUser: null,
+          });
+        }
+      })
+      .catch(() => {});
+  };
   const [twilioCfg, setTwilioCfg] = useState<{
     callmebotKey: string;
     fast2smsKey: string;
@@ -114,7 +192,8 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
   };
 
   const hasCloudGateway = Boolean(
-    twilioCfg.callmebotKey.trim() ||
+    waBridge.state === 'CONNECTED' ||
+      twilioCfg.callmebotKey.trim() ||
       twilioCfg.fast2smsKey.trim() ||
       (twilioCfg.sid.trim() && twilioCfg.token.trim() && twilioCfg.from.trim())
   );
@@ -454,24 +533,69 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
 
                 <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 5 }}>
                   <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', marginBottom: 4 }}>
-                    <strong>2. Free Automatic WhatsApp (CallMeBot):</strong>{' '}
-                    <a
-                      href="https://www.callmebot.com/blog/free-api-whatsapp-messages/"
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: 'var(--ink-primary)' }}
-                    >
-                      Get free WhatsApp API key
-                    </a>
+                    <strong>2. Built-In Direct WhatsApp Auto-Sender (No API Key Needed):</strong>
                   </div>
-                  <input
-                    type="text"
-                    className="hw-input mono"
-                    style={{ width: '100%', height: 26, fontSize: 11 }}
-                    placeholder="CallMeBot WhatsApp API Key (6 digits)"
-                    value={twilioCfg.callmebotKey}
-                    onChange={(e) => updateTwilioCfg({ callmebotKey: e.target.value })}
-                  />
+                  {waBridge.available ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      {waBridge.state === 'CONNECTED' ? (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span className="mono" style={{ fontSize: 11, color: 'var(--ink-primary)' }}>
+                            Connected (+{waBridge.connectedUser}) — Auto-sends text, photo &amp; GPS
+                          </span>
+                          <button
+                            type="button"
+                            className="hw-btn"
+                            style={{ height: 23, padding: '0 8px', fontSize: 10.5 }}
+                            onClick={handleDisconnectBuiltInWhatsApp}
+                          >
+                            Unlink
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          {waBridge.state === 'IDLE' && (
+                            <button
+                              type="button"
+                              className="hw-btn primary"
+                              style={{ height: 27, fontSize: 11 }}
+                              onClick={handleConnectBuiltInWhatsApp}
+                            >
+                              Generate WhatsApp Link QR &amp; Code
+                            </button>
+                          )}
+                          {waBridge.state === 'CONNECTING' && !waBridge.qrDataUrl && (
+                            <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
+                              Connecting to WhatsApp Multi-Device bridge…
+                            </div>
+                          )}
+                          {waBridge.qrDataUrl && (
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0' }}>
+                              <img
+                                src={waBridge.qrDataUrl}
+                                alt="WhatsApp Link QR"
+                                style={{ width: 108, height: 108, borderRadius: 4, border: '1px solid var(--border-default)' }}
+                              />
+                              <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', lineHeight: 1.4 }}>
+                                <div>Scan once in <strong>WhatsApp → Linked Devices → Link a Device</strong></div>
+                                {waBridge.pairingCode && (
+                                  <div style={{ marginTop: 5 }}>
+                                    Or enter phone code:{' '}
+                                    <strong className="mono" style={{ fontSize: 12, color: 'var(--ink-primary)' }}>
+                                      {waBridge.pairingCode}
+                                    </strong>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
+                      Run local server (<span className="mono">npm start</span> on localhost:4400) to use the built-in QR WhatsApp Auto-Sender, or use Step 1 / Step 3 on cloud.
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 5 }}>

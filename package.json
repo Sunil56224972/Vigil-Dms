@@ -15,8 +15,10 @@
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.21",
     "@supabase/supabase-js": "^2.119.2",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
     "animejs": "^3.2.2",
     "express": "^4.21.2",
+    "pino": "^10.4.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

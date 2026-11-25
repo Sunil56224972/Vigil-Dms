@@ -25,7 +25,15 @@ import {
   getDbMetrics,
 } from './db.mjs';
 import { parseTelemetryPayload, analyzeKinematicSeries } from './kinematics.mjs';
-import { dispatchTwilioVoiceCall } from '../api/emergency-call.mjs';
+import { dispatchTwilioVoiceCall, buildEmergencyMessageText } from '../api/emergency-call.mjs';
+import {
+  getWhatsAppStatus,
+  hasSavedWhatsAppSession,
+  startWhatsAppLink,
+  disconnectWhatsApp,
+  sendWhatsAppEmergency,
+  setWhatsAppStatusListener,
+} from './whatsappBridge.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -253,6 +261,28 @@ async function bootstrap() {
     res.json(verifyLedgerIntegrity());
   });
 
+  setWhatsAppStatusListener((waStatus) => {
+    broadcastToCockpits({ type: 'WHATSAPP_STATUS', whatsapp: waStatus });
+  });
+  if (hasSavedWhatsAppSession()) {
+    startWhatsAppLink({}).catch(() => {});
+  }
+
+  app.get('/api/whatsapp/status', (_req, res) => {
+    res.json({ ok: true, whatsapp: getWhatsAppStatus() });
+  });
+
+  app.post('/api/whatsapp/connect', async (req, res) => {
+    const phone = String(req.body?.phone || getThresholds().emergencyPhone || '7389416622');
+    const wa = await startWhatsAppLink({ phoneForPairingCode: phone });
+    res.json({ ok: true, whatsapp: wa });
+  });
+
+  app.post('/api/whatsapp/disconnect', async (_req, res) => {
+    const wa = await disconnectWhatsApp();
+    res.json({ ok: true, whatsapp: wa });
+  });
+
   const handleEmergencyCall = async (req, res) => {
     const body = req.body || {};
     const thresholds = getThresholds();
@@ -263,6 +293,27 @@ async function bootstrap() {
       : digits.length === 10
       ? `+91${digits}`
       : `+${digits}`;
+
+    const smsText = buildEmergencyMessageText({
+      to: dialNumber,
+      driverTag: body.driverTag,
+      reason: body.reason || 'Driver emergency',
+      speedKmh: body.speedKmh,
+      lat: body.lat,
+      lon: body.lon,
+    });
+
+    // 1. Built-in Direct WhatsApp Auto-Sender (zero API key, sends text + Night-IR photo + GPS location pin)
+    const waOut = await sendWhatsAppEmergency({
+      phone: dialNumber,
+      text: smsText,
+      frameEvidence: body.frameEvidence || null,
+      lat: body.lat,
+      lon: body.lon,
+    }).catch((err) => ({
+      sent: false,
+      reason: err instanceof Error ? err.message : 'WA error',
+    }));
 
     const pstnResult = await dispatchTwilioVoiceCall({
       to: dialNumber,
@@ -282,6 +333,16 @@ async function bootstrap() {
       status: 'FAILED',
       message: err instanceof Error ? err.message : 'PSTN gateway error',
     }));
+
+    if (waOut.sent) {
+      pstnResult.ok = true;
+      pstnResult.pstnDispatched = true;
+      pstnResult.status = 'RINGING';
+      pstnResult.channelsSent = ['Direct WhatsApp + Photo + GPS', ...(pstnResult.channelsSent || [])];
+      pstnResult.message = `Auto-sent WhatsApp SOS${
+        body.frameEvidence ? ' + Cabin Snapshot' : ''
+      } + GPS to ${dialNumber}`;
+    }
 
     const saved = recordIncident({
       sessionId: body.sessionId ?? null,

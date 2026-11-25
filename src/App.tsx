@@ -154,6 +154,7 @@ const CockpitStation: React.FC = () => {
   ocularLatestRef.current = ocularMetrics;
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const persistTimerRef = useRef<number | null>(null);
+  const waConnectedRef = useRef<boolean>(false);
   const fallbackGpsRef = useRef<{ lat: number | null; lon: number | null }>({
     lat: null,
     lon: null,
@@ -291,7 +292,8 @@ const CockpitStation: React.FC = () => {
         } catch {}
 
         const hasSilentApi = Boolean(
-          gatewayCfg.callmebotKey.trim() ||
+          waConnectedRef.current ||
+            gatewayCfg.callmebotKey.trim() ||
             gatewayCfg.fast2smsKey.trim() ||
             (gatewayCfg.sid.trim() && gatewayCfg.token.trim() && gatewayCfg.from.trim())
         );
@@ -517,6 +519,15 @@ const CockpitStation: React.FC = () => {
 
     let localWs: WebSocket | null = null;
     if (isLocalHost) {
+      fetch('/api/whatsapp/status')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (mounted && d?.whatsapp?.state === 'CONNECTED') {
+            waConnectedRef.current = true;
+          }
+        })
+        .catch(() => {});
+
       try {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         localWs = new WebSocket(`${proto}//${window.location.host}/ws?role=cockpit`);
@@ -525,6 +536,8 @@ const CockpitStation: React.FC = () => {
             const msg = JSON.parse(String(ev.data));
             if (msg.type === 'EXTERNAL_TELEMETRY_FRAME' && msg.frame) {
               kinematicEngineRef.current.ingestExternalFrame(msg.frame);
+            } else if (msg.type === 'WHATSAPP_STATUS' && msg.whatsapp) {
+              waConnectedRef.current = msg.whatsapp.state === 'CONNECTED';
             }
           } catch {
             // Ignore malformed WS message
