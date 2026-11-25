@@ -219,12 +219,14 @@ export async function sendWhatsAppEmergency({ phone, text, frameEvidence, lat, l
     rawDigits.length === 10 ? `91${rawDigits}` : rawDigits || '917389416622';
 
   let jid = `${fullDigits}@s.whatsapp.net`;
-  try {
-    const [exists] = await sock.onWhatsApp(fullDigits);
-    if (exists?.jid) {
-      jid = exists.jid;
-    }
-  } catch {}
+  if (connectedUser !== fullDigits) {
+    try {
+      const [exists] = await sock.onWhatsApp(fullDigits);
+      if (exists?.jid) {
+        jid = exists.jid;
+      }
+    } catch {}
+  }
 
   try {
     if (frameEvidence && typeof frameEvidence === 'string' && frameEvidence.includes('base64,')) {

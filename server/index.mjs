@@ -387,7 +387,7 @@ async function bootstrap() {
       webhookResult,
     };
     broadcastToCockpits(wsPayload);
-    for (const [ws] of wsClients.entries()) {
+    for (const ws of sensorNodes.keys()) {
       if (ws.readyState === 1) {
         try {
           ws.send(JSON.stringify(wsPayload));
