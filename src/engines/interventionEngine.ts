@@ -35,7 +35,17 @@ class CabinAcousticSynthesizer {
   }
 
   unlock(): void {
-    this.ensureContext();
+    if (this.ctx) {
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        this.ensureContext();
+      }, 0);
+    }
   }
 
   playAdvisoryChime(): void {
@@ -185,15 +195,17 @@ export class PreventiveInterventionEngine {
 
   runSelfCheck(audioArmed: boolean, voiceArmed: boolean): void {
     this.synth.unlock();
-    if (audioArmed) {
-      this.synth.playAdvisoryChime();
-    }
-    this.speakCallout(
-      'SELF_CHECK',
-      'Cabin audio and voice intervention check nominal.',
-      voiceArmed,
-      1500
-    );
+    window.setTimeout(() => {
+      if (audioArmed) {
+        this.synth.playAdvisoryChime();
+      }
+      this.speakCallout(
+        'SELF_CHECK',
+        'Cabin audio and voice intervention check nominal.',
+        voiceArmed,
+        1500
+      );
+    }, 0);
   }
 
   forceManualReset(): void {
@@ -226,16 +238,18 @@ export class PreventiveInterventionEngine {
 
   announceEmergencyCall(phoneRaw: string, audioArmed: boolean, voiceArmed: boolean): void {
     this.synth.unlock();
-    if (audioArmed) {
-      this.synth.playEmergencyRingback();
-    }
-    const digitsSpoken = phoneRaw.replace(/\D/g, '').slice(-10).split('').join(' ');
-    this.speakCallout(
-      'EMERGENCY_SOS',
-      `Calling emergency number ${digitsSpoken || phoneRaw}. Transmitting GPS location and driver telemetry.`,
-      voiceArmed,
-      3000
-    );
+    window.setTimeout(() => {
+      if (audioArmed) {
+        this.synth.playEmergencyRingback();
+      }
+      const digitsSpoken = phoneRaw.replace(/\D/g, '').slice(-10).split('').join(' ');
+      this.speakCallout(
+        'EMERGENCY_SOS',
+        `Calling emergency number ${digitsSpoken || phoneRaw}. Transmitting GPS location and driver telemetry.`,
+        voiceArmed,
+        3000
+      );
+    }, 0);
   }
 
   private speakCallout(key: string, phrase: string, armed: boolean, cooldownMs = 8000): void {
@@ -245,16 +259,19 @@ export class PreventiveInterventionEngine {
     if (now < nextAllowed) return;
     this.voiceCooldownMap.set(key, now + cooldownMs);
 
-    try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(phrase);
-      utter.rate = 1.08;
-      utter.pitch = 0.96;
-      utter.volume = 1.0;
-      window.speechSynthesis.speak(utter);
-    } catch {
-      // Ignore browser speech engine errors
-    }
+    // Defer Windows SAPI / SpeechSynthesis IPC off the synchronous click/RAF frame to prevent INP stalls
+    window.setTimeout(() => {
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(phrase);
+        utter.rate = 1.08;
+        utter.pitch = 0.96;
+        utter.volume = 1.0;
+        window.speechSynthesis.speak(utter);
+      } catch {
+        // Ignore browser speech engine errors
+      }
+    }, 0);
   }
 
   private canEmit(cat: IncidentCategory, nowMs: number, cooldownMs: number): boolean {

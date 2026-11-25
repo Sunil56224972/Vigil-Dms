@@ -152,39 +152,60 @@ const CockpitStation: React.FC = () => {
   kinematicLatestRef.current = kinematicMetrics;
   const ocularLatestRef = useRef<OcularMetrics>(ocularMetrics);
   ocularLatestRef.current = ocularMetrics;
+  const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const persistTimerRef = useRef<number | null>(null);
 
-  const captureOpticalEvidence = useCallback((): string | null => {
-    // Prefer enhanced Night-IR canvas when low-light restoration is active so night snapshots are clear
+  const captureOpticalEvidenceAsync = useCallback((): Promise<string | null> => {
     const enh = ocularLatestRef.current.nightVisionActive
       ? ocularEngineRef.current.getEnhancedCanvas()
       : null;
-    if (enh && enh.width > 0 && enh.height > 0) {
-      try {
-        const off = document.createElement('canvas');
-        off.width = 320;
-        off.height = Math.round((320 * enh.height) / enh.width);
-        const ctx = off.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(enh, 0, 0, off.width, off.height);
-          return off.toDataURL('image/jpeg', 0.68);
-        }
-      } catch {
-        // Fall through to raw video snapshot
-      }
-    }
-
     const vid = videoRef.current;
-    if (!vid || vid.readyState < 2 || vid.videoWidth === 0) return null;
+
+    let src: CanvasImageSource | null = null;
+    let srcW = 0;
+    let srcH = 0;
+    if (enh && enh.width > 0 && enh.height > 0) {
+      src = enh;
+      srcW = enh.width;
+      srcH = enh.height;
+    } else if (vid && vid.readyState >= 2 && vid.videoWidth > 0) {
+      src = vid;
+      srcW = vid.videoWidth;
+      srcH = vid.videoHeight;
+    }
+    if (!src || srcW === 0 || srcH === 0) return Promise.resolve(null);
+
     try {
-      const off = document.createElement('canvas');
+      if (!snapshotCanvasRef.current) {
+        snapshotCanvasRef.current = document.createElement('canvas');
+      }
+      const off = snapshotCanvasRef.current;
       off.width = 320;
-      off.height = Math.round((320 * vid.videoHeight) / vid.videoWidth);
+      off.height = Math.max(1, Math.round((320 * srcH) / srcW));
       const ctx = off.getContext('2d');
-      if (!ctx) return null;
-      ctx.drawImage(vid, 0, 0, off.width, off.height);
-      return off.toDataURL('image/jpeg', 0.65);
+      if (!ctx) return Promise.resolve(null);
+      ctx.drawImage(src, 0, 0, off.width, off.height);
+
+      // Encode JPEG asynchronously off the main thread to avoid INP blocking
+      return new Promise((resolve) => {
+        off.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(null);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onloadend = () =>
+              resolve(typeof reader.result === 'string' ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          },
+          'image/jpeg',
+          0.66
+        );
+      });
     } catch {
-      return null;
+      return Promise.resolve(null);
     }
   }, []);
 
@@ -194,12 +215,7 @@ const CockpitStation: React.FC = () => {
       const kin = kinematicLatestRef.current;
       const dial = formatDialNumber(th.emergencyPhone || '7389416622');
 
-      interventionEngineRef.current.announceEmergencyCall(
-        th.emergencyPhone || '7389416622',
-        th.audioArmed,
-        th.voiceArmed
-      );
-
+      // 1. Commit lightweight UI state immediately (<4ms INP) so button click paints on next frame
       setEmergencyCall({
         active: true,
         phoneRaw: th.emergencyPhone || '7389416622',
@@ -228,109 +244,116 @@ const CockpitStation: React.FC = () => {
         } catch {}
       }
 
-      // Broadcast live incoming SOS alert to any paired /sensor smartphone over Supabase Realtime
-      broadcastEmergencySos({
-        dialNumber: dial.display,
-        reason,
-        speedKmh: kin.speedKmh,
-        lat: kin.lat,
-        lon: kin.lon,
-      });
+      // 2. Defer audio synthesis, off-thread JPEG encoding, Realtime broadcast & PSTN fetch past next paint
+      window.setTimeout(async () => {
+        interventionEngineRef.current.announceEmergencyCall(
+          th.emergencyPhone || '7389416622',
+          th.audioArmed,
+          th.voiceArmed
+        );
 
-      let twilioLocal = { sid: '', token: '', from: '' };
-      try {
-        const rawTw = localStorage.getItem('vigil_pstn_twilio');
-        if (rawTw) {
-          const parsed = JSON.parse(rawTw);
-          twilioLocal = {
-            sid: String(parsed.sid || ''),
-            token: String(parsed.token || ''),
-            from: String(parsed.from || ''),
-          };
-        }
-      } catch {}
-
-      const snap = captureOpticalEvidence();
-      let addedCloudIncident = false;
-      logSafetyIncident({
-        sessionId: activeSessionRef.current?.id ?? null,
-        category: 'EMERGENCY_SOS',
-        severity: 'CRITICAL',
-        stage: 3,
-        summary: `Emergency SOS call initiated to ${dial.display} (${reason})`,
-        interventionAction: 'EMERGENCY_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS',
-        metrics: {
+        broadcastEmergencySos({
           dialNumber: dial.display,
           reason,
-          autoTriggered,
           speedKmh: kin.speedKmh,
           lat: kin.lat,
           lon: kin.lon,
-          earMean: ocularLatestRef.current.earMean,
-          perclos60: ocularLatestRef.current.perclos60,
-          nightVisionActive: ocularLatestRef.current.nightVisionActive,
-        },
-        frameEvidence: snap,
-        webhookUrl: th.webhookUrl,
-      }).then((saved) => {
-        if (saved) {
-          addedCloudIncident = true;
-          setIncidents((prev) => (prev.some((x) => x.id === saved.id) ? prev : [saved, ...prev]));
-        }
-      });
+        });
 
-      // Dispatch real Cloud PSTN voice call (/api/emergency-call works on Vercel Serverless & local Express)
-      fetch('/api/emergency-call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        let twilioLocal = { sid: '', token: '', from: '' };
+        try {
+          const rawTw = localStorage.getItem('vigil_pstn_twilio');
+          if (rawTw) {
+            const parsed = JSON.parse(rawTw);
+            twilioLocal = {
+              sid: String(parsed.sid || ''),
+              token: String(parsed.token || ''),
+              from: String(parsed.from || ''),
+            };
+          }
+        } catch {}
+
+        const snap = await captureOpticalEvidenceAsync();
+        let addedCloudIncident = false;
+        logSafetyIncident({
           sessionId: activeSessionRef.current?.id ?? null,
-          phone: dial.display,
-          reason,
-          autoTriggered,
-          speedKmh: kin.speedKmh,
-          lat: kin.lat,
-          lon: kin.lon,
+          category: 'EMERGENCY_SOS',
+          severity: 'CRITICAL',
+          stage: 3,
+          summary: `Emergency SOS call initiated to ${dial.display} (${reason})`,
+          interventionAction: 'EMERGENCY_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS',
+          metrics: {
+            dialNumber: dial.display,
+            reason,
+            autoTriggered,
+            speedKmh: kin.speedKmh,
+            lat: kin.lat,
+            lon: kin.lon,
+            earMean: ocularLatestRef.current.earMean,
+            perclos60: ocularLatestRef.current.perclos60,
+            nightVisionActive: ocularLatestRef.current.nightVisionActive,
+          },
           frameEvidence: snap,
-          twilioSid: twilioLocal.sid,
-          twilioToken: twilioLocal.token,
-          twilioFrom: twilioLocal.from,
-        }),
-      })
-        .then((r) => r.json().catch(() => null))
-        .then((data) => {
-          if (data) {
+          webhookUrl: th.webhookUrl,
+        }).then((saved) => {
+          if (saved) {
+            addedCloudIncident = true;
+            setIncidents((prev) => (prev.some((x) => x.id === saved.id) ? prev : [saved, ...prev]));
+          }
+        });
+
+        fetch('/api/emergency-call', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: activeSessionRef.current?.id ?? null,
+            phone: dial.display,
+            reason,
+            autoTriggered,
+            speedKmh: kin.speedKmh,
+            lat: kin.lat,
+            lon: kin.lon,
+            frameEvidence: snap,
+            twilioSid: twilioLocal.sid,
+            twilioToken: twilioLocal.token,
+            twilioFrom: twilioLocal.from,
+          }),
+        })
+          .then((r) => r.json().catch(() => null))
+          .then((data) => {
+            if (data) {
+              setEmergencyCall((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      pstnStatus: data.status || (data.pstnDispatched ? 'RINGING' : 'NO_GATEWAY'),
+                      pstnMessage: data.message,
+                      callSid: data.callSid,
+                    }
+                  : prev
+              );
+              if (data.incident && !addedCloudIncident) {
+                setIncidents((prev) =>
+                  prev.some((x) => x.id === data.incident.id) ? prev : [data.incident, ...prev]
+                );
+              }
+            }
+          })
+          .catch(() => {
             setEmergencyCall((prev) =>
               prev
                 ? {
                     ...prev,
-                    pstnStatus: data.status || (data.pstnDispatched ? 'RINGING' : 'NO_GATEWAY'),
-                    pstnMessage: data.message,
-                    callSid: data.callSid,
+                    pstnStatus: 'NO_GATEWAY',
+                    pstnMessage:
+                      'PSTN gateway unreachable — use OS Dialer, WhatsApp SOS, or paired /sensor phone.',
                   }
                 : prev
             );
-            if (data.incident && !addedCloudIncident) {
-              setIncidents((prev) =>
-                prev.some((x) => x.id === data.incident.id) ? prev : [data.incident, ...prev]
-              );
-            }
-          }
-        })
-        .catch(() => {
-          setEmergencyCall((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  pstnStatus: 'NO_GATEWAY',
-                  pstnMessage:
-                    'PSTN gateway unreachable — use OS Dialer, WhatsApp SOS, or paired /sensor phone.',
-                }
-              : prev
-          );
-        });
+          });
+      }, 0);
     },
-    [captureOpticalEvidence]
+    [captureOpticalEvidenceAsync]
   );
 
   useEffect(() => {
@@ -501,22 +524,23 @@ const CockpitStation: React.FC = () => {
 
       if (evalOut.emittedIncidents.length > 0) {
         for (const ev of evalOut.emittedIncidents) {
-          const snap = ev.captureOpticalSnapshot ? captureOpticalEvidence() : null;
-          logSafetyIncident({
-            sessionId: activeSessionRef.current?.id ?? null,
-            category: ev.category,
-            severity: ev.severity,
-            stage: ev.stage,
-            summary: ev.summary,
-            interventionAction: ev.interventionAction,
-            metrics: ev.metrics,
-            frameEvidence: snap,
-            webhookUrl: th.webhookUrl,
-          }).then((saved) => {
+          void (async () => {
+            const snap = ev.captureOpticalSnapshot ? await captureOpticalEvidenceAsync() : null;
+            const saved = await logSafetyIncident({
+              sessionId: activeSessionRef.current?.id ?? null,
+              category: ev.category,
+              severity: ev.severity,
+              stage: ev.stage,
+              summary: ev.summary,
+              interventionAction: ev.interventionAction,
+              metrics: ev.metrics,
+              frameEvidence: snap,
+              webhookUrl: th.webhookUrl,
+            });
             if (saved) {
               setIncidents((prev) => (prev.some((x) => x.id === saved.id) ? prev : [saved, ...prev]));
             }
-          });
+          })();
         }
       }
 
@@ -563,7 +587,7 @@ const CockpitStation: React.FC = () => {
 
     rafId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(rafId);
-  }, [captureOpticalEvidence, triggerEmergencyCall]);
+  }, [captureOpticalEvidenceAsync, triggerEmergencyCall]);
 
   const stopOpticalFeed = useCallback(() => {
     if (mediaStreamRef.current) {
@@ -732,12 +756,19 @@ const CockpitStation: React.FC = () => {
     }
   };
 
-  const handleUpdateThresholds = async (partial: Partial<ThresholdsConfig>) => {
+  const handleUpdateThresholds = async (partial: Partial<ThresholdsConfig>): Promise<void> => {
     interventionEngineRef.current.unlockAudio();
-    const next = { ...thresholds, ...partial };
-    setThresholds(next);
-    const saved = await persistThresholdsConfig(partial);
-    setThresholds(saved);
+    setThresholds((prev) => {
+      const next = { ...prev, ...partial };
+      thresholdsRef.current = next;
+      return next;
+    });
+    if (persistTimerRef.current != null) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      void persistThresholdsConfig(thresholdsRef.current);
+    }, 320);
   };
 
   const handleSelectPreset = async (profile: VehicleProfileKey) => {
