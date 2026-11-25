@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { VigilEyeLogo } from './VigilEyeLogo';
 
 export const MobileSensorNode: React.FC = () => {
   const [armed, setArmed] = useState(false);
@@ -266,10 +267,13 @@ export const MobileSensorNode: React.FC = () => {
       <div className="sensor-handheld">
         <div className="inst-bay">
           <div className="inst-bay-header">
-            <div>
-              <div className="inst-bay-title">Vigil Field Sensor</div>
-              <div className="inst-bay-subtitle">
-                Unit {nodeIdRef.current} · {wsReady ? 'Realtime WSS connected' : 'Connecting…'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <VigilEyeLogo width={36} height={34} />
+              <div>
+                <div className="inst-bay-title">Vigil Field Sensor</div>
+                <div className="inst-bay-subtitle">
+                  Unit {nodeIdRef.current} · {wsReady ? 'Realtime WSS connected' : 'Connecting…'}
+                </div>
               </div>
             </div>
             <span className={`hw-led ${armed && wsReady ? 'ok' : armed ? 'warn' : ''}`} />

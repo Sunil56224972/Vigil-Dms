@@ -32,6 +32,7 @@ import { TelemetrySourceDeck } from './components/TelemetrySourceDeck';
 import { InterventionMatrix, formatDialNumber } from './components/InterventionMatrix';
 import { BlackboxLedger } from './components/BlackboxLedger';
 import { MobileSensorNode } from './components/MobileSensorNode';
+import { VigilEyeLogo } from './components/VigilEyeLogo';
 import type {
   ActiveInterventionState,
   AnalyzedTelemetryReport,
@@ -890,12 +891,18 @@ const CockpitStation: React.FC = () => {
 
       <header className="dms-topbar">
         <div className="dms-brand">
-          <div className="dms-brand-mark" aria-hidden="true">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.6" />
-              <circle cx="8" cy="8" r="2" fill="currentColor" />
-            </svg>
-          </div>
+          <VigilEyeLogo
+            width={40}
+            height={38}
+            alertStage={intervention.stage}
+            driverGaze={{
+              active: ocularMetrics.active,
+              faceDetected: ocularMetrics.faceDetected,
+              gazeX: ocularMetrics.gazeHorizontal,
+              gazeY: ocularMetrics.gazeVertical,
+              eyesClosed: ocularMetrics.earMean < ocularMetrics.earThreshold && ocularMetrics.faceDetected,
+            }}
+          />
           <div>
             <div className="dms-brand-title">Vigil DMS</div>
             <div className="dms-brand-sub">Driver Fatigue &amp; Vehicle Kinematics Monitor</div>

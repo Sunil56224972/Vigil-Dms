@@ -20,7 +20,7 @@
   ],
   "rewrites": [
     {
-      "source": "/((?!api/|assets/|wasm/|models/).*)",
+      "source": "/((?!api/|assets/|wasm/|models/|brand/|favicon\\.png).*)",
       "destination": "/index.html"
     }
   ]

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import anime from 'animejs';
 import { OdometerValue } from './OdometerValue';
+import { VigilEyeLogo } from './VigilEyeLogo';
 import type {
   NightVisionMode,
   OcularLandmarksOverlay,
@@ -466,6 +467,9 @@ export const OpticalViewport: React.FC<OpticalViewportProps> = ({
 
           {!metrics.active && (
             <div className="optical-idle-overlay">
+              <div style={{ marginBottom: 12 }}>
+                <VigilEyeLogo width={84} height={80} title="Vigil Ocular Sentinel — Tracking Ready" />
+              </div>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: '#eceae4', marginBottom: 4 }}>
                 No optical stream connected
               </div>

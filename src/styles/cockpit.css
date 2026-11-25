@@ -61,6 +61,28 @@
   flex-shrink: 0;
 }
 
+.dms-eye-emblem {
+  border-radius: 6px;
+  background: #f5ebe9;
+  border: 1px solid rgba(17, 16, 15, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 1px 2px rgba(0, 0, 0, 0.18);
+  padding: 2px 3px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, transform 0.12s ease;
+}
+
+.dms-eye-emblem:hover {
+  border-color: rgba(17, 16, 15, 0.48);
+}
+
+.dms-eye-emblem.stage-crit {
+  border-color: var(--status-danger);
+}
+
 .dms-brand-title {
   font-size: 14.5px;
   font-weight: 600;
