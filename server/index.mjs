@@ -274,7 +274,8 @@ async function bootstrap() {
 
   app.post('/api/whatsapp/connect', async (req, res) => {
     const phone = String(req.body?.phone || getThresholds().emergencyPhone || '7389416622');
-    const wa = await startWhatsAppLink({ phoneForPairingCode: phone });
+    const usePairingCode = Boolean(req.body?.usePairingCode);
+    const wa = await startWhatsAppLink({ phoneForPairingCode: phone, usePairingCode });
     res.json({ ok: true, whatsapp: wa });
   });
 

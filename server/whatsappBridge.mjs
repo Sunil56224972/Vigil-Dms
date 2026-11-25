@@ -45,7 +45,7 @@ export function hasSavedWhatsAppSession() {
   }
 }
 
-export async function startWhatsAppLink({ phoneForPairingCode = '' } = {}) {
+export async function startWhatsAppLink({ phoneForPairingCode = '', usePairingCode = false } = {}) {
   if (statusState === 'CONNECTED' && sock) {
     return getWhatsAppStatus();
   }
@@ -57,12 +57,13 @@ export async function startWhatsAppLink({ phoneForPairingCode = '' } = {}) {
   fs.mkdirSync(WA_AUTH_DIR, { recursive: true });
   statusState = 'CONNECTING';
   lastError = null;
+  latestPairingCode = null;
   notifyStatus();
 
   try {
     const baileys = await import('@whiskeysockets/baileys');
     const makeWASocket = baileys.default?.default || baileys.default || baileys.makeWASocket;
-    const { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = baileys;
+    const { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = baileys;
     const pinoMod = await import('pino');
     const pino = pinoMod.default || pinoMod;
 
@@ -80,12 +81,15 @@ export async function startWhatsAppLink({ phoneForPairingCode = '' } = {}) {
       sock = null;
     }
 
+    // WhatsApp requires official Ubuntu/Chrome browser tuple for pairing codes & multi-device linking
+    const browserTuple = Browsers?.ubuntu ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '20.0.04'];
+
     sock = makeWASocket({
       version,
       auth: state,
       printQRInTerminal: false,
       logger: pino({ level: 'silent' }),
-      browser: ['Vigil DMS Safety', 'Chrome', '1.0.0'],
+      browser: browserTuple,
       syncFullHistory: false,
       markOnlineOnConnect: false,
     });
@@ -110,12 +114,12 @@ export async function startWhatsAppLink({ phoneForPairingCode = '' } = {}) {
         try {
           latestQrDataUrl = await QRCode.toDataURL(qr, {
             margin: 1,
-            width: 220,
+            width: 240,
             color: { dark: '#141413', light: '#ffffff' },
           });
         } catch {}
 
-        if (pairTarget && !state.creds.registered && !requestedCode) {
+        if (usePairingCode && pairTarget && !state.creds.registered && !requestedCode) {
           requestedCode = true;
           setTimeout(async () => {
             try {
@@ -127,9 +131,9 @@ export async function startWhatsAppLink({ phoneForPairingCode = '' } = {}) {
                 }
               }
             } catch {
-              // QR remains available if pairing code rate-limited
+              // QR remains available
             }
-          }, 1200);
+          }, 1500);
         }
         notifyStatus();
       }

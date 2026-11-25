@@ -90,24 +90,34 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
               pairingCode: d.whatsapp.pairingCode || null,
               connectedUser: d.whatsapp.connectedUser || null,
             });
+            if (d.whatsapp.state === 'QR_READY') {
+              setShowPstnSetup(true);
+            }
           }
         })
         .catch(() => {});
     };
     pollWa();
-    const timer = showPstnSetup ? window.setInterval(pollWa, 1800) : null;
+    const timer =
+      showPstnSetup || waBridge.state === 'CONNECTING' || waBridge.state === 'QR_READY'
+        ? window.setInterval(pollWa, 1800)
+        : null;
     return () => {
       active = false;
       if (timer) clearInterval(timer);
     };
-  }, [showPstnSetup]);
+  }, [showPstnSetup, waBridge.state]);
 
-  const handleConnectBuiltInWhatsApp = () => {
+  const handleConnectBuiltInWhatsApp = (usePairingCode = false) => {
+    setShowPstnSetup(true);
     setWaBridge((p) => ({ ...p, state: 'CONNECTING' }));
     fetch('/api/whatsapp/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: thresholds.emergencyPhone || '7389416622' }),
+      body: JSON.stringify({
+        phone: thresholds.emergencyPhone || '7389416622',
+        usePairingCode,
+      }),
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -554,36 +564,59 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
                       ) : (
                         <>
                           {waBridge.state === 'IDLE' && (
-                            <button
-                              type="button"
-                              className="hw-btn primary"
-                              style={{ height: 27, fontSize: 11 }}
-                              onClick={handleConnectBuiltInWhatsApp}
-                            >
-                              Generate WhatsApp Link QR &amp; Code
-                            </button>
+                            <div style={{ display: 'flex', gap: 5 }}>
+                              <button
+                                type="button"
+                                className="hw-btn primary"
+                                style={{ flex: 1, height: 27, fontSize: 11 }}
+                                onClick={() => handleConnectBuiltInWhatsApp(false)}
+                              >
+                                Show WhatsApp Scan QR
+                              </button>
+                              <button
+                                type="button"
+                                className="hw-btn"
+                                style={{ height: 27, fontSize: 10.5 }}
+                                onClick={() => handleConnectBuiltInWhatsApp(true)}
+                              >
+                                Phone Code
+                              </button>
+                            </div>
                           )}
                           {waBridge.state === 'CONNECTING' && !waBridge.qrDataUrl && (
                             <div className="mono" style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
-                              Connecting to WhatsApp Multi-Device bridge…
+                              Generating live WhatsApp QR…
                             </div>
                           )}
                           {waBridge.qrDataUrl && (
-                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0' }}>
+                            <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '4px 0' }}>
                               <img
                                 src={waBridge.qrDataUrl}
                                 alt="WhatsApp Link QR"
-                                style={{ width: 108, height: 108, borderRadius: 4, border: '1px solid var(--border-default)' }}
+                                style={{ width: 132, height: 132, borderRadius: 4, border: '1px solid var(--border-default)', background: '#fff' }}
                               />
-                              <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', lineHeight: 1.4 }}>
-                                <div>Scan once in <strong>WhatsApp → Linked Devices → Link a Device</strong></div>
-                                {waBridge.pairingCode && (
-                                  <div style={{ marginTop: 5 }}>
-                                    Or enter phone code:{' '}
-                                    <strong className="mono" style={{ fontSize: 12, color: 'var(--ink-primary)' }}>
+                              <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', lineHeight: 1.45 }}>
+                                <div>
+                                  1. Open <strong>WhatsApp</strong> on your phone<br />
+                                  2. Tap <strong>⋮ → Linked devices → Link a device</strong><br />
+                                  3. Point your phone camera at this QR code
+                                </div>
+                                {waBridge.pairingCode ? (
+                                  <div style={{ marginTop: 6 }}>
+                                    Phone code:{' '}
+                                    <strong className="mono" style={{ fontSize: 12.5, color: 'var(--ink-primary)' }}>
                                       {waBridge.pairingCode}
                                     </strong>
                                   </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="hw-btn"
+                                    style={{ marginTop: 6, height: 22, padding: '0 7px', fontSize: 10 }}
+                                    onClick={() => handleConnectBuiltInWhatsApp(true)}
+                                  >
+                                    Use 8-digit code instead
+                                  </button>
                                 )}
                               </div>
                             </div>
