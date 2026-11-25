@@ -20,7 +20,7 @@
   ],
   "rewrites": [
     {
-      "source": "/((?!assets/|wasm/|models/).*)",
+      "source": "/((?!api/|assets/|wasm/|models/).*)",
       "destination": "/index.html"
     }
   ]

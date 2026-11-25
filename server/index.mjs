@@ -25,6 +25,7 @@ import {
   getDbMetrics,
 } from './db.mjs';
 import { parseTelemetryPayload, analyzeKinematicSeries } from './kinematics.mjs';
+import { dispatchTwilioVoiceCall } from '../api/emergency-call.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -252,16 +253,32 @@ async function bootstrap() {
     res.json(verifyLedgerIntegrity());
   });
 
-  app.post('/api/emergency/call', async (req, res) => {
+  const handleEmergencyCall = async (req, res) => {
     const body = req.body || {};
     const thresholds = getThresholds();
-    const rawPhone = String(body.phone || thresholds.emergencyPhone || '7389416622').trim();
+    const rawPhone = String(body.phone || body.to || thresholds.emergencyPhone || '7389416622').trim();
     const digits = rawPhone.replace(/\D/g, '') || '7389416622';
     const dialNumber = rawPhone.startsWith('+')
       ? `+${digits}`
       : digits.length === 10
       ? `+91${digits}`
       : `+${digits}`;
+
+    const pstnResult = await dispatchTwilioVoiceCall({
+      to: dialNumber,
+      reason: body.reason || 'Driver emergency',
+      speedKmh: body.speedKmh,
+      lat: body.lat,
+      lon: body.lon,
+      twilioSid: body.twilioSid,
+      twilioToken: body.twilioToken,
+      twilioFrom: body.twilioFrom,
+    }).catch((err) => ({
+      ok: false,
+      pstnDispatched: false,
+      status: 'FAILED',
+      message: err instanceof Error ? err.message : 'PSTN gateway error',
+    }));
 
     const saved = recordIncident({
       sessionId: body.sessionId ?? null,
@@ -270,11 +287,15 @@ async function bootstrap() {
       severity: 'CRITICAL',
       stage: 3,
       summary: `Emergency SOS call dispatched to ${dialNumber} (${body.reason || 'Driver emergency'})`,
-      interventionAction: 'EMERGENCY_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS',
+      interventionAction: pstnResult.pstnDispatched
+        ? 'TWILIO_PSTN_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS'
+        : 'EMERGENCY_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS',
       metrics: {
         dialNumber,
         reason: body.reason || 'Driver emergency',
         autoTriggered: Boolean(body.autoTriggered),
+        pstnDispatched: Boolean(pstnResult.pstnDispatched),
+        callSid: pstnResult.callSid ?? null,
         speedKmh: body.speedKmh ?? 0,
         lat: body.lat ?? null,
         lon: body.lon ?? null,
@@ -287,25 +308,40 @@ async function bootstrap() {
       webhookResult = await dispatchSafetyWebhook(thresholds.webhookUrl, {
         event: 'DMS9_EMERGENCY_SOS_CALL',
         dialNumber,
+        pstnResult,
         incident: saved,
       });
     }
 
-    broadcastToCockpits({
+    const wsPayload = {
       type: 'EMERGENCY_CALL_DISPATCHED',
       dialNumber,
+      reason: body.reason || 'Driver emergency',
+      pstnResult,
       incident: saved,
       webhookResult,
-    });
+    };
+    broadcastToCockpits(wsPayload);
+    for (const [ws] of wsClients.entries()) {
+      if (ws.readyState === 1) {
+        try {
+          ws.send(JSON.stringify(wsPayload));
+        } catch {}
+      }
+    }
 
-    res.json({
-      ok: true,
+    res.status(pstnResult.status === 'FAILED' ? 400 : 200).json({
+      ...pstnResult,
+      ok: pstnResult.status !== 'FAILED',
       dialNumber,
       telUri: `tel:${dialNumber}`,
       incident: saved,
       webhookResult,
     });
-  });
+  };
+
+  app.post('/api/emergency/call', handleEmergencyCall);
+  app.post('/api/emergency-call', handleEmergencyCall);
 
   app.delete('/api/ledger/reset', (_req, res) => {
     const verification = clearAllLedgerData();

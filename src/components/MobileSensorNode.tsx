@@ -13,6 +13,10 @@ export const MobileSensorNode: React.FC = () => {
   const [accelLat, setAccelLat] = useState(0);
   const [yawRate, setYawRate] = useState(0);
   const [gpsLocked, setGpsLocked] = useState(false);
+  const [incomingSos, setIncomingSos] = useState<{
+    dialNumber: string;
+    reason: string;
+  } | null>(null);
 
   const nodeIdRef = useRef(`IMU-${Math.random().toString(16).slice(2, 6).toUpperCase()}`);
   const tareRef = useRef({ x: 0, y: 0, z: 0, set: false });
@@ -66,7 +70,32 @@ export const MobileSensorNode: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const ch = supabase.channel('dms9-telemetry-bus');
+    const triggerPhoneSosRing = (dialNumber: string, reason: string) => {
+      setIncomingSos({ dialNumber, reason });
+      try {
+        navigator.vibrate?.([500, 200, 500, 200, 900]);
+      } catch {}
+      try {
+        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const ctx = new AudioCtx();
+        for (const [s, e] of [[0, 0.45], [0.65, 1.1], [1.4, 1.9]]) {
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.frequency.value = 880;
+          g.gain.value = 0.2;
+          osc.connect(g).connect(ctx.destination);
+          osc.start(ctx.currentTime + s);
+          osc.stop(ctx.currentTime + e);
+        }
+      } catch {}
+    };
+
+    const ch = supabase
+      .channel('dms9-telemetry-bus')
+      .on('broadcast', { event: 'emergency_sos' }, (msg) => {
+        const p = (msg.payload || {}) as { dialNumber?: string; reason?: string };
+        triggerPhoneSosRing(p.dialNumber || '+917389416622', p.reason || 'Cockpit SOS Alert');
+      });
     ch.subscribe((status) => {
       const ok = status === 'SUBSCRIBED';
       wsReadyRef.current = ok;
@@ -83,6 +112,14 @@ export const MobileSensorNode: React.FC = () => {
       try {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${proto}//${window.location.host}/ws?role=sensor&label=${nodeIdRef.current}`);
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(String(ev.data));
+            if (msg.type === 'EMERGENCY_CALL_DISPATCHED') {
+              triggerPhoneSosRing(msg.dialNumber || '+917389416622', msg.reason || 'Cockpit SOS Alert');
+            }
+          } catch {}
+        };
         localWsRef.current = ws;
       } catch {
         // Supabase Realtime WSS remains primary
@@ -344,6 +381,44 @@ export const MobileSensorNode: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {incomingSos && (
+              <div
+                style={{
+                  padding: '10px 12px',
+                  background: 'var(--bg-subtle)',
+                  border: '1px solid var(--status-danger)',
+                  boxShadow: 'inset 3px 0 0 var(--status-danger)',
+                  borderRadius: 4,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-primary)' }}>
+                  EMERGENCY SOS DISPATCH: {incomingSos.dialNumber}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--ink-secondary)' }}>
+                  {incomingSos.reason} — Tap below to place cellular call immediately:
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <a
+                    href={`tel:${incomingSos.dialNumber}`}
+                    className="hw-btn primary"
+                    style={{ flex: 1, textDecoration: 'none', fontWeight: 700 }}
+                  >
+                    Dial {incomingSos.dialNumber} Now
+                  </a>
+                  <button
+                    type="button"
+                    className="hw-btn"
+                    onClick={() => setIncomingSos(null)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
               <a

@@ -61,6 +61,37 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
   const streamListRef = useRef<HTMLDivElement | null>(null);
   const prevTopIdRef = useRef<string | null>(recentIncidents[0]?.id ?? null);
   const [callElapsedSec, setCallElapsedSec] = useState(0);
+  const [showPstnSetup, setShowPstnSetup] = useState(false);
+  const [twilioCfg, setTwilioCfg] = useState<{ sid: string; token: string; from: string }>(() => {
+    try {
+      const raw = localStorage.getItem('vigil_pstn_twilio');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          sid: String(parsed.sid || ''),
+          token: String(parsed.token || ''),
+          from: String(parsed.from || ''),
+        };
+      }
+    } catch {}
+    return { sid: '', token: '', from: '' };
+  });
+
+  const updateTwilioCfg = (patch: Partial<{ sid: string; token: string; from: string }>) => {
+    setTwilioCfg((prev) => {
+      const next = { ...prev, ...patch };
+      try {
+        localStorage.setItem('vigil_pstn_twilio', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const hasLocalTwilio = Boolean(
+    twilioCfg.sid.trim() && twilioCfg.token.trim() && twilioCfg.from.trim()
+  );
+  const isMobileBrowser =
+    typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   useEffect(() => {
     if (!emergencyCall?.active) {
@@ -336,14 +367,23 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
               gap: 7,
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600 }}>Emergency SOS Call</div>
                 <div style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>
-                  Auto-dials on 5s unrecovered microsleep
+                  Cloud PSTN voice call + 5s microsleep Auto-SOS
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  type="button"
+                  className={`hw-btn ${hasLocalTwilio || showPstnSetup ? 'selected' : ''}`}
+                  style={{ height: 22, padding: '0 7px', fontSize: 10.5 }}
+                  onClick={() => setShowPstnSetup((v) => !v)}
+                  title="Configure Cloud PSTN Voice Gateway (Twilio) to ring mobile phones directly from a PC"
+                >
+                  {hasLocalTwilio ? 'PSTN Ready' : 'Cloud PSTN'}
+                </button>
                 <span style={{ fontSize: 10.5, color: 'var(--ink-muted)' }}>Auto-SOS</span>
                 <button
                   type="button"
@@ -358,6 +398,58 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
               </div>
             </div>
 
+            {showPstnSetup && (
+              <div
+                style={{
+                  padding: '8px 9px',
+                  background: 'var(--bg-well)',
+                  border: '1px solid var(--border-default)',
+                  borderRadius: 4,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 5,
+                }}
+              >
+                <div style={{ fontSize: 10.5, color: 'var(--ink-secondary)', lineHeight: 1.35 }}>
+                  <strong>Cloud PSTN Voice Gateway (Twilio):</strong> Required to place real cellular calls from a laptop/PC. Stored privately in this browser only.
+                </div>
+                <input
+                  type="text"
+                  className="hw-input mono"
+                  style={{ height: 26, fontSize: 11 }}
+                  placeholder="Twilio Account SID (AC...)"
+                  value={twilioCfg.sid}
+                  onChange={(e) => updateTwilioCfg({ sid: e.target.value })}
+                />
+                <input
+                  type="password"
+                  className="hw-input mono"
+                  style={{ height: 26, fontSize: 11 }}
+                  placeholder="Twilio Auth Token"
+                  value={twilioCfg.token}
+                  onChange={(e) => updateTwilioCfg({ token: e.target.value })}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 5 }}>
+                  <input
+                    type="tel"
+                    className="hw-input mono"
+                    style={{ height: 26, fontSize: 11 }}
+                    placeholder="Twilio From Number (e.g. +1256...)"
+                    value={twilioCfg.from}
+                    onChange={(e) => updateTwilioCfg({ from: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="hw-btn"
+                    style={{ height: 26, padding: '0 9px', fontSize: 10.5 }}
+                    onClick={() => setShowPstnSetup(false)}
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 6 }}>
               <input
                 type="tel"
@@ -368,14 +460,25 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
                 value={thresholds.emergencyPhone ?? '7389416622'}
                 onChange={(e) => onUpdateThresholds({ emergencyPhone: e.target.value })}
               />
-              <a
-                href={dialInfo.telHref}
-                className="hw-btn danger"
-                style={{ textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}
-                onClick={() => onTriggerEmergencyCall('Manual emergency SOS call')}
-              >
-                Call {dialInfo.cleanDigits.slice(-10)}
-              </a>
+              {isMobileBrowser ? (
+                <a
+                  href={dialInfo.telHref}
+                  className="hw-btn danger"
+                  style={{ textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}
+                  onClick={() => onTriggerEmergencyCall('Manual emergency SOS call')}
+                >
+                  Call {dialInfo.cleanDigits.slice(-10)}
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  className="hw-btn danger"
+                  style={{ fontWeight: 600, whiteSpace: 'nowrap' }}
+                  onClick={() => onTriggerEmergencyCall('Manual emergency SOS call')}
+                >
+                  Call {dialInfo.cleanDigits.slice(-10)}
+                </button>
+              )}
             </div>
 
             {intervention.sosCountdownSec != null && !emergencyCall?.active && (
@@ -447,13 +550,65 @@ export const InterventionMatrix: React.FC<InterventionMatrixProps> = ({
                     ? ` · GPS ${emergencyCall.lat.toFixed(4)}, ${emergencyCall.lon.toFixed(4)}`
                     : ''}
                 </div>
+                <div style={{ fontSize: 11, color: 'var(--ink-secondary)' }}>
+                  {emergencyCall.reason} · Speed {emergencyCall.speedKmh.toFixed(0)} km/h
+                  {emergencyCall.lat != null && emergencyCall.lon != null
+                    ? ` · GPS ${emergencyCall.lat.toFixed(4)}, ${emergencyCall.lon.toFixed(4)}`
+                    : ''}
+                </div>
+                {emergencyCall.pstnMessage && (
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      lineHeight: 1.35,
+                      padding: '5px 7px',
+                      borderRadius: 3,
+                      background: 'var(--bg-well)',
+                      border: '1px solid var(--border-subtle)',
+                      color:
+                        emergencyCall.pstnStatus === 'RINGING'
+                          ? 'var(--ink-primary)'
+                          : emergencyCall.pstnStatus === 'FAILED'
+                          ? 'var(--status-danger)'
+                          : 'var(--ink-muted)',
+                    }}
+                  >
+                    {emergencyCall.pstnMessage}
+                    {emergencyCall.pstnStatus === 'NO_GATEWAY' && !showPstnSetup && (
+                      <button
+                        type="button"
+                        onClick={() => setShowPstnSetup(true)}
+                        style={{
+                          marginLeft: 6,
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          textDecoration: 'underline',
+                          color: 'var(--ink-primary)',
+                          fontSize: 10.5,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Configure Twilio PSTN
+                      </button>
+                    )}
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                  <a
-                    href={dialInfo.telHref}
+                  <button
+                    type="button"
                     className="hw-btn danger"
-                    style={{ height: 24, padding: '0 8px', fontSize: 10.5, textDecoration: 'none' }}
+                    style={{ height: 24, padding: '0 8px', fontSize: 10.5 }}
+                    onClick={() => onTriggerEmergencyCall('Manual PSTN redial')}
                   >
                     Redial
+                  </button>
+                  <a
+                    href={dialInfo.telHref}
+                    className="hw-btn"
+                    style={{ height: 24, padding: '0 8px', fontSize: 10.5, textDecoration: 'none' }}
+                  >
+                    OS Dialer
                   </a>
                   <a
                     href={`sms:${dialInfo.display}?body=${sosBodyText}`}

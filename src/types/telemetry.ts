@@ -179,6 +179,9 @@ export interface EmergencyCallState {
   lat: number | null;
   lon: number | null;
   speedKmh: number;
+  pstnStatus?: 'DIALING' | 'RINGING' | 'NO_GATEWAY' | 'FAILED';
+  pstnMessage?: string;
+  callSid?: string;
 }
 
 export interface SessionRecord {

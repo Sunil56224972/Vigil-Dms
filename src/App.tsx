@@ -4,6 +4,7 @@ import {
   DEFAULT_THRESHOLDS_CLIENT,
   VEHICLE_PROFILE_PRESETS,
   analyzeTelemetryLogCloud,
+  broadcastEmergencySos,
   createDrivingSession,
   createRealtimeTelemetryBus,
   fetchDrivingSessions,
@@ -209,10 +210,14 @@ const CockpitStation: React.FC = () => {
         lat: kin.lat,
         lon: kin.lon,
         speedKmh: kin.speedKmh,
+        pstnStatus: 'DIALING',
+        pstnMessage: `Contacting PSTN voice gateway & paired /sensor nodes for ${dial.display}…`,
       });
 
-      // For automatic SOS (no anchor click), invoke OS/mobile tel: handler directly
-      if (autoTriggered && typeof document !== 'undefined') {
+      // On mobile browsers (with a SIM dialer), invoke tel: URI on Auto-SOS too
+      const isMobile =
+        typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (autoTriggered && isMobile && typeof document !== 'undefined') {
         try {
           const a = document.createElement('a');
           a.href = dial.telHref;
@@ -220,10 +225,30 @@ const CockpitStation: React.FC = () => {
           document.body.appendChild(a);
           a.click();
           a.remove();
-        } catch {
-          // Ignore if headless/desktop without registered tel: app
-        }
+        } catch {}
       }
+
+      // Broadcast live incoming SOS alert to any paired /sensor smartphone over Supabase Realtime
+      broadcastEmergencySos({
+        dialNumber: dial.display,
+        reason,
+        speedKmh: kin.speedKmh,
+        lat: kin.lat,
+        lon: kin.lon,
+      });
+
+      let twilioLocal = { sid: '', token: '', from: '' };
+      try {
+        const rawTw = localStorage.getItem('vigil_pstn_twilio');
+        if (rawTw) {
+          const parsed = JSON.parse(rawTw);
+          twilioLocal = {
+            sid: String(parsed.sid || ''),
+            token: String(parsed.token || ''),
+            from: String(parsed.from || ''),
+          };
+        }
+      } catch {}
 
       const snap = captureOpticalEvidence();
       let addedCloudIncident = false;
@@ -254,8 +279,8 @@ const CockpitStation: React.FC = () => {
         }
       });
 
-      // Notify local gateway (and populate offline UI ledger if cloud is unreachable)
-      fetch('/api/emergency/call', {
+      // Dispatch real Cloud PSTN voice call (/api/emergency-call works on Vercel Serverless & local Express)
+      fetch('/api/emergency-call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -267,17 +292,43 @@ const CockpitStation: React.FC = () => {
           lat: kin.lat,
           lon: kin.lon,
           frameEvidence: snap,
+          twilioSid: twilioLocal.sid,
+          twilioToken: twilioLocal.token,
+          twilioFrom: twilioLocal.from,
         }),
       })
-        .then((r) => (r.ok ? r.json() : null))
+        .then((r) => r.json().catch(() => null))
         .then((data) => {
-          if (data?.incident && !addedCloudIncident) {
-            setIncidents((prev) =>
-              prev.some((x) => x.id === data.incident.id) ? prev : [data.incident, ...prev]
+          if (data) {
+            setEmergencyCall((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    pstnStatus: data.status || (data.pstnDispatched ? 'RINGING' : 'NO_GATEWAY'),
+                    pstnMessage: data.message,
+                    callSid: data.callSid,
+                  }
+                : prev
             );
+            if (data.incident && !addedCloudIncident) {
+              setIncidents((prev) =>
+                prev.some((x) => x.id === data.incident.id) ? prev : [data.incident, ...prev]
+              );
+            }
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          setEmergencyCall((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  pstnStatus: 'NO_GATEWAY',
+                  pstnMessage:
+                    'PSTN gateway unreachable — use OS Dialer, WhatsApp SOS, or paired /sensor phone.',
+                }
+              : prev
+          );
+        });
     },
     [captureOpticalEvidence]
   );

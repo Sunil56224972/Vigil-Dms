@@ -383,6 +383,32 @@ export async function analyzeTelemetryLogCloud(params: {
   return (await res.json()) as AnalyzedTelemetryReport;
 }
 
+export async function broadcastEmergencySos(payload: {
+  dialNumber: string;
+  reason: string;
+  speedKmh: number;
+  lat: number | null;
+  lon: number | null;
+}): Promise<void> {
+  try {
+    const ch = supabase.channel('dms9-telemetry-bus');
+    ch.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await ch.send({
+          type: 'broadcast',
+          event: 'emergency_sos',
+          payload: { ...payload, timestampMs: Date.now() },
+        });
+        setTimeout(() => {
+          supabase.removeChannel(ch).catch(() => {});
+        }, 1200);
+      }
+    });
+  } catch {
+    // Ignore broadcast error if offline
+  }
+}
+
 export function createRealtimeTelemetryBus(handlers: {
   onSensorFrame?: (frame: Record<string, unknown>) => void;
   onIncidentInsert?: (incident: IncidentRecord) => void;
