@@ -383,6 +383,29 @@ export async function analyzeTelemetryLogCloud(params: {
   return (await res.json()) as AnalyzedTelemetryReport;
 }
 
+export async function fetchWhatsAppRelayStatus(): Promise<{
+  connected: boolean;
+  user: string | null;
+}> {
+  try {
+    const { data, error } = await supabase
+      .from('dms9_config')
+      .select('value, updated_at')
+      .eq('key', 'whatsapp_relay_status')
+      .maybeSingle();
+    if (error || !data?.value) return { connected: false, user: null };
+    const val = data.value as { connected?: boolean; user?: string | null; updatedAt?: string };
+    // Consider active if heartbeat updated within the last 5 minutes
+    const ageMs = val.updatedAt ? Date.now() - new Date(val.updatedAt).getTime() : 0;
+    if (val.connected && ageMs < 5 * 60 * 1000) {
+      return { connected: true, user: val.user || null };
+    }
+    return { connected: false, user: null };
+  } catch {
+    return { connected: false, user: null };
+  }
+}
+
 let activeBusChannel: RealtimeChannel | null = null;
 
 export async function broadcastEmergencySos(payload: {

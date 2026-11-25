@@ -679,10 +679,11 @@ export class PreventiveInterventionEngine {
       this.hazardStrobeActive = false;
     }
 
-    // --- 4. UNRESPONSIVE DRIVER AUTO-SOS COUNTDOWN (5s unrecovered Stage-3 Microsleep) ---
+    // --- 4. AUTOMATIC EMERGENCY SOS DISPATCH ON STAGE-3 CRITICAL EMERGENCY ---
     let sosCountdownSec: number | null = null;
     let triggerAutoEmergencyCall = false;
     const hasPhone = Boolean((thresholds.emergencyPhone || '').trim());
+    const isCriticalStage3Emergency = frameStage === 3;
     const unrecoveredInMicrosleepLockout =
       this.lockoutActive &&
       ocular.active &&
@@ -694,14 +695,14 @@ export class PreventiveInterventionEngine {
       );
 
     if (
-      (isActivelyMicrosleeping || unrecoveredInMicrosleepLockout) &&
+      (isCriticalStage3Emergency || isActivelyMicrosleeping || unrecoveredInMicrosleepLockout) &&
       thresholds.emergencyAutoCall &&
       hasPhone &&
       !this.autoSosSuppressedForCycle &&
-      now - this.lastAutoSosAtMs > 35000
+      now - this.lastAutoSosAtMs > 25000
     ) {
       this.unresponsiveSosMs += dtMs;
-      const SOS_DELAY_MS = 5000;
+      const SOS_DELAY_MS = 1200;
       if (this.unresponsiveSosMs >= SOS_DELAY_MS) {
         triggerAutoEmergencyCall = true;
         this.lastAutoSosAtMs = now;
@@ -713,7 +714,7 @@ export class PreventiveInterventionEngine {
       }
     } else {
       this.unresponsiveSosMs = Math.max(0, this.unresponsiveSosMs - dtMs * 2);
-      if (!this.lockoutActive) {
+      if (!this.lockoutActive && frameStage < 3) {
         this.autoSosSuppressedForCycle = false;
         this.unresponsiveSosMs = 0;
       }

@@ -269,8 +269,34 @@ async function bootstrap() {
     res.json(verifyLedgerIntegrity());
   });
 
+  let sbRelayClient = null;
+  let cloudRelayChannel = null;
+  let cloudRelaySubscribed = false;
+  const handledCloudSosIds = new Set();
+
+  function publishWaHeartbeatToSupabase(waStatus) {
+    if (!sbRelayClient) return;
+    sbRelayClient
+      .from('dms9_config')
+      .upsert(
+        {
+          key: 'whatsapp_relay_status',
+          value: {
+            connected: waStatus.state === 'CONNECTED',
+            user: waStatus.connectedUser || null,
+            updatedAt: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'key' }
+      )
+      .then(() => {})
+      .catch(() => {});
+  }
+
   setWhatsAppStatusListener((waStatus) => {
     broadcastToCockpits({ type: 'WHATSAPP_STATUS', whatsapp: waStatus });
+    publishWaHeartbeatToSupabase(waStatus);
     if (cloudRelayChannel && cloudRelaySubscribed) {
       cloudRelayChannel
         .send({
@@ -288,10 +314,7 @@ async function bootstrap() {
     startWhatsAppLink({}).catch(() => {});
   }
 
-  // Cloud-to-WhatsApp Realtime Relay: allows https://vigil-dms.vercel.app (any device) to auto-send WhatsApp SOS + GPS
-  let cloudRelayChannel = null;
-  let cloudRelaySubscribed = false;
-  const handledCloudSosIds = new Set();
+  // Cloud-to-WhatsApp HTTPS Watcher + Realtime Relay: guarantees https://vigil-dms.vercel.app auto-sends WhatsApp SOS + Photo + GPS
   try {
     let sbUrl = process.env.VITE_SUPABASE_URL || 'https://jdvafpwancenabxbnxbh.supabase.co';
     let sbKey =
@@ -305,84 +328,88 @@ async function bootstrap() {
         if (ln.startsWith('VITE_SUPABASE_ANON_KEY=')) sbKey = ln.slice('VITE_SUPABASE_ANON_KEY='.length).trim() || sbKey;
       }
     }
-    const sbClient = createClient(sbUrl, sbKey, {
+    sbRelayClient = createClient(sbUrl, sbKey, {
       auth: { persistSession: false },
     });
-    cloudRelayChannel = sbClient
-      .channel('dms9-telemetry-bus', { config: { broadcast: { self: false } } })
-      .on('broadcast', { event: 'whatsapp_status_ping' }, () => {
-        const wa = getWhatsAppStatus();
-        if (cloudRelaySubscribed) {
-          cloudRelayChannel
-            .send({
-              type: 'broadcast',
-              event: 'whatsapp_status_pong',
-              payload: { state: wa.state, connectedUser: wa.connectedUser },
-            })
-            .catch(() => {});
+
+    // 1. HTTPS REST Incident Poller (1.2s interval — immune to WebSocket drops & handles full JPEG snapshots)
+    let highWaterSeq = null;
+    let pollingBusy = false;
+
+    const pollCloudIncidents = async () => {
+      if (pollingBusy || !sbRelayClient) return;
+      pollingBusy = true;
+      try {
+        if (highWaterSeq === null) {
+          const { data: headRows } = await sbRelayClient
+            .from('dms9_incidents')
+            .select('seq')
+            .order('seq', { ascending: false })
+            .limit(1);
+          highWaterSeq = headRows && headRows.length > 0 ? Number(headRows[0].seq) : 0;
+          console.log(`[WA-Cloud-Relay] Watching Supabase dms9_incidents from seq #${highWaterSeq}`);
+          publishWaHeartbeatToSupabase(getWhatsAppStatus());
+          return;
         }
-      })
-      .on('broadcast', { event: 'emergency_sos' }, async (msg) => {
-        const p = msg.payload || {};
-        if (!p.fromCloudClient) return;
-        const reqId = String(p.requestId || '');
-        if (reqId && handledCloudSosIds.has(reqId)) return;
-        if (reqId) {
-          handledCloudSosIds.add(reqId);
-          if (handledCloudSosIds.size > 100) {
-            const first = handledCloudSosIds.values().next().value;
-            handledCloudSosIds.delete(first);
+
+        const { data: newRows } = await sbRelayClient
+          .from('dms9_incidents')
+          .select('*')
+          .gt('seq', highWaterSeq)
+          .order('seq', { ascending: true })
+          .limit(10);
+
+        if (!newRows || newRows.length === 0) return;
+
+        for (const row of newRows) {
+          highWaterSeq = Math.max(highWaterSeq, Number(row.seq));
+          if (row.category !== 'EMERGENCY_SOS') continue;
+          if (handledCloudSosIds.has(row.id)) continue;
+
+          let m = {};
+          try {
+            m = typeof row.metrics_json === 'string' ? JSON.parse(row.metrics_json) : row.metrics_json || {};
+          } catch {}
+
+          // Skip if already dispatched directly by local HTTP /api/emergency-call on this machine
+          if (m.sourceOrigin === 'LOCALHOST') continue;
+
+          const wa = getWhatsAppStatus();
+          if (wa.state !== 'CONNECTED') continue;
+
+          handledCloudSosIds.add(row.id);
+          const dialNum = String(m.dialNumber || getThresholds().emergencyPhone || '+917389416622');
+          const text = buildEmergencyMessageText({
+            to: dialNum,
+            driverTag: m.driverTag || 'Vigil-Driver',
+            reason: m.reason || row.summary || 'Critical Emergency SOS',
+            speedKmh: m.speedKmh ?? 0,
+            lat: m.lat ?? null,
+            lon: m.lon ?? null,
+          });
+
+          const out = await sendWhatsAppEmergency({
+            phone: dialNum,
+            text,
+            frameEvidence: row.frame_evidence || null,
+            lat: m.lat ?? null,
+            lon: m.lon ?? null,
+          });
+
+          if (out.sent) {
+            console.log(`[WA-Cloud-Relay] Auto-sent WhatsApp SOS + GPS for cloud incident #${row.seq} -> ${dialNum}`);
           }
         }
-        const wa = getWhatsAppStatus();
-        if (wa.state !== 'CONNECTED') return;
+      } catch {
+        // Ignore transient network hiccups
+      } finally {
+        pollingBusy = false;
+      }
+    };
 
-        const dialNum = String(p.dialNumber || '+917389416622');
-        const text = buildEmergencyMessageText({
-          to: dialNum,
-          driverTag: p.driverTag || 'Cloud-Cockpit',
-          reason: p.reason || 'Emergency SOS Alert',
-          speedKmh: p.speedKmh ?? 0,
-          lat: p.lat ?? null,
-          lon: p.lon ?? null,
-        });
-
-        const out = await sendWhatsAppEmergency({
-          phone: dialNum,
-          text,
-          frameEvidence: p.frameEvidence || null,
-          lat: p.lat ?? null,
-          lon: p.lon ?? null,
-        });
-
-        if (out.sent && cloudRelaySubscribed) {
-          await cloudRelayChannel
-            .send({
-              type: 'broadcast',
-              event: 'emergency_sos_ack',
-              payload: {
-                requestId: reqId,
-                ok: true,
-                dialNumber: dialNum,
-                message: `Auto-sent WhatsApp SOS${p.frameEvidence ? ' + Cabin Snapshot' : ''} + GPS to ${dialNum}`,
-              },
-            })
-            .catch(() => {});
-        }
-      })
-      .subscribe((status) => {
-        cloudRelaySubscribed = status === 'SUBSCRIBED';
-        if (cloudRelaySubscribed) {
-          const wa = getWhatsAppStatus();
-          cloudRelayChannel
-            .send({
-              type: 'broadcast',
-              event: 'whatsapp_status_pong',
-              payload: { state: wa.state, connectedUser: wa.connectedUser },
-            })
-            .catch(() => {});
-        }
-      });
+    setInterval(pollCloudIncidents, 1200);
+    setInterval(() => publishWaHeartbeatToSupabase(getWhatsAppStatus()), 60000);
+    pollCloudIncidents();
   } catch {}
 
   app.get('/api/whatsapp/status', (_req, res) => {

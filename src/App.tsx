@@ -10,6 +10,7 @@ import {
   fetchDrivingSessions,
   fetchSafetyIncidents,
   fetchThresholdsConfig,
+  fetchWhatsAppRelayStatus,
   logSafetyIncident,
   persistThresholdsConfig,
   supabase,
@@ -290,7 +291,6 @@ const CockpitStation: React.FC = () => {
           sid: '',
           token: '',
           from: '',
-          autoOpenApp: true,
         };
         try {
           const rawTw = localStorage.getItem('vigil_pstn_twilio');
@@ -302,43 +302,21 @@ const CockpitStation: React.FC = () => {
               sid: String(parsed.sid || ''),
               token: String(parsed.token || ''),
               from: String(parsed.from || ''),
-              autoOpenApp: parsed.autoOpenApp !== false,
             };
           }
         } catch {}
 
-        const hasSilentApi = Boolean(
-          waConnectedRef.current ||
-            gatewayCfg.callmebotKey.trim() ||
-            gatewayCfg.fast2smsKey.trim() ||
-            (gatewayCfg.sid.trim() && gatewayCfg.token.trim() && gatewayCfg.from.trim())
-        );
-
-        // If no background SMS/WhatsApp API or live relay is connected, auto-launch native SMS (mobile) or WhatsApp Web
-        if (!hasSilentApi && gatewayCfg.autoOpenApp && typeof window !== 'undefined') {
-          const mapsPart =
-            lat != null && lon != null
-              ? ` · Live GPS: https://maps.google.com/?q=${lat.toFixed(5)},${lon.toFixed(5)}`
-              : '';
-          const msgBody = encodeURIComponent(
-            `[VIGIL DMS EMERGENCY SOS] ${reason} · Speed ${kin.speedKmh.toFixed(0)} km/h${mapsPart} · Immediate assistance required.`
+        // Never open manual wa.me browser popups — dispatch 100% automatically in the background
+        if (!isLocalOrigin && waConnectedRef.current) {
+          setEmergencyCall((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  pstnStatus: 'RINGING',
+                  pstnMessage: `Auto-sent WhatsApp SOS${snap ? ' + Cabin Snapshot' : ''} + Live GPS to ${dial.display}`,
+                }
+              : prev
           );
-          const isMob = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-          try {
-            if (isMob) {
-              if (autoTriggered) {
-                const a = document.createElement('a');
-                a.href = `sms:${dial.display}?body=${msgBody}`;
-                a.style.display = 'none';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-              }
-            } else {
-              const waDigits = dial.display.replace(/\D/g, '');
-              window.open(`https://wa.me/${waDigits}?text=${msgBody}`, '_blank', 'noopener,noreferrer');
-            }
-          } catch {}
         }
 
         let addedCloudIncident = false;
@@ -351,6 +329,8 @@ const CockpitStation: React.FC = () => {
           interventionAction: 'EMERGENCY_VOICE_CALL + GPS_SOS_DISPATCH + HAZARD_BEACONS',
           metrics: {
             dialNumber: dial.display,
+            driverTag,
+            sourceOrigin: isLocalOrigin ? 'LOCALHOST' : 'CLOUD',
             reason,
             autoTriggered,
             speedKmh: kin.speedKmh,
@@ -456,11 +436,12 @@ const CockpitStation: React.FC = () => {
     let mounted = true;
 
     (async () => {
-      const [cfg, sessList, incList, proof] = await Promise.all([
+      const [cfg, sessList, incList, proof, waRelay] = await Promise.all([
         fetchThresholdsConfig(),
         fetchDrivingSessions(25),
         fetchSafetyIncidents(null, 80),
         verifyBlackboxChain(),
+        fetchWhatsAppRelayStatus(),
       ]);
       if (!mounted) return;
       setThresholds(cfg);
@@ -468,6 +449,10 @@ const CockpitStation: React.FC = () => {
       setIncidents(incList);
       setLedgerProof(proof);
       setSupabaseReady(proof.reason !== 'RPC_UNREACHABLE');
+      if (waRelay.connected) {
+        waConnectedRef.current = true;
+        setCloudWaRelay(waRelay);
+      }
     })();
 
     const isLocalHost =
